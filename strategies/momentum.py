@@ -1,17 +1,38 @@
 """
-Trend Following / Momentum Strategy.
+Time Series Momentum Strategy.
 
-Inspired by:
-  - Two Sigma's systematic trend-following with alternative data overlays
-  - Classic CTA (Commodity Trading Advisor) dual moving-average crossovers
-  - Citadel's real-time momentum capture
+Redesigned based on:
+  - Moskowitz, Ooi, Pedersen (2012): "Time Series Momentum"
+  - AQR's "A Century of Evidence on Trend-Following Investing"
+  - Managed futures CTA strategies (AQR, Man AHL) with 10-15% annualized
 
-Concept: Assets in motion tend to stay in motion. We identify strong
-trends using moving-average crossovers, MACD, and rate-of-change,
-then ride the trend until momentum fades.
+WHY IT WORKS:
+  Assets that have gone up tend to continue going up (and vice versa) over
+  1-12 month horizons. This is driven by: (1) behavioral underreaction to
+  new information, (2) herding and positive feedback loops, (3) central bank
+  policy persistence, and (4) corporate earnings momentum. The effect has been
+  documented across 58 liquid instruments over 140+ years with Sharpe ~1.0.
+
+IMPLEMENTATION:
+  Uses multiple lookback windows (1, 3, 6, 12 months) and combines them
+  into a composite signal. Each window captures different aspects of
+  momentum: short-term (1m) is noisier but faster, long-term (12m) is
+  smoother but slower. Equal-weighted combination reduces timing risk.
+
+WHEN IT WORKS BEST:
+  - Trending markets (strong directional moves)
+  - Low-to-normal volatility regimes
+  - Post-earnings announcements and macro events
+
+WEAKNESSES:
+  - Suffers badly during trend reversals ("momentum crashes")
+  - Whipsawed in range-bound/choppy markets
+  - Reduced profitability when volatility is very high
+  - 2009 and 2020 V-shaped recoveries caused momentum crashes
 """
 
 from dataclasses import dataclass
+from typing import Dict, Optional
 
 import numpy as np
 import pandas as pd
@@ -21,132 +42,192 @@ from strategies.mean_reversion import Signal
 
 class MomentumStrategy:
     """
-    Trend following / momentum.
+    Time Series Momentum (TSMOM) strategy.
 
-    Signals:
-      BUY  when multiple momentum indicators align upward
-      SELL when momentum indicators align downward
+    Core idea from Moskowitz et al.: Look at past returns over multiple
+    horizons. If returns were positive, go long; if negative, go short
+    (or exit). Combine multiple lookback windows for robustness.
+
+    Enhanced with:
+      - Volatility scaling (position size inversely proportional to vol)
+      - Volume confirmation (higher conviction when volume confirms)
+      - Acceleration detection (momentum of momentum)
     """
 
     name = "momentum"
 
     def __init__(
         self,
-        fast_ma: int = 20,
-        slow_ma: int = 50,
-        roc_period: int = 10,
-        adx_threshold: float = 25.0,
+        lookback_windows: Optional[Dict[str, int]] = None,
+        vol_target: float = 0.12,
+        min_trend_strength: float = 0.15,
     ):
-        self.fast_ma = fast_ma
-        self.slow_ma = slow_ma
-        self.roc_period = roc_period
-        self.adx_threshold = adx_threshold
+        # Multiple lookback windows (trading days)
+        self.lookback_windows = lookback_windows or {
+            "1m": 21,
+            "3m": 63,
+            "6m": 126,
+            "12m": 252,
+        }
+        self.vol_target = vol_target
+        self.min_trend_strength = min_trend_strength
 
     def generate_signal(self, symbol: str, df: pd.DataFrame) -> Signal:
         """
-        Analyze price data and return a momentum Signal.
+        Generate a time-series momentum signal.
 
-        Expects df to have: Close, SMA_20, SMA_50, MACD, MACD_signal,
-        Volume, Vol_ratio (from DataFetcher.compute_indicators).
+        For each lookback window, compute the return over that period.
+        Combine windows with equal weight, scale by inverse volatility,
+        and confirm with volume.
         """
-        if len(df) < self.slow_ma + 10:
+        max_lookback = max(self.lookback_windows.values())
+        if len(df) < max_lookback + 10:
             return Signal(symbol, "HOLD", 0.0, self.name, "Insufficient data")
 
         close = df["Close"].values
 
-        # ── Moving Average Crossover ─────────────────────────────────
-        sma_fast = df["SMA_20"].iloc[-1] if "SMA_20" in df.columns else np.mean(close[-self.fast_ma:])
-        sma_slow = df["SMA_50"].iloc[-1] if "SMA_50" in df.columns else np.mean(close[-self.slow_ma:])
+        # -- Multi-window momentum signals --
+        window_signals = {}
+        window_returns = {}
 
-        ma_signal = 0.0
-        if sma_slow > 0:
-            ma_ratio = (sma_fast - sma_slow) / sma_slow
-            ma_signal = np.clip(ma_ratio * 20, -1, 1)  # scale
+        for name, period in self.lookback_windows.items():
+            if len(close) <= period:
+                continue
 
-        # ── MACD Histogram ───────────────────────────────────────────
-        macd_signal_val = 0.0
-        if "MACD_hist" in df.columns:
-            hist = df["MACD_hist"].iloc[-1]
-            prev_hist = df["MACD_hist"].iloc[-2] if len(df) > 1 else 0
-            # Acceleration: is histogram growing?
-            macd_signal_val = np.clip(hist * 10, -1, 1)
-            if hist > 0 and hist > prev_hist:
-                macd_signal_val = min(macd_signal_val + 0.2, 1.0)
-            elif hist < 0 and hist < prev_hist:
-                macd_signal_val = max(macd_signal_val - 0.2, -1.0)
+            # Raw return over lookback period
+            ret = (close[-1] - close[-period]) / close[-period]
+            window_returns[name] = ret
 
-        # ── Rate of Change (ROC) ─────────────────────────────────────
-        roc = 0.0
-        if len(close) > self.roc_period:
-            past = close[-self.roc_period - 1]
-            roc = (close[-1] - past) / past if past > 0 else 0
-        roc_signal = np.clip(roc * 10, -1, 1)
+            # Normalize return: sign * magnitude (capped)
+            # Positive return -> buy signal, negative -> sell signal
+            signal = np.clip(ret / self.min_trend_strength, -1.0, 1.0)
+            window_signals[name] = signal
 
-        # ── ADX-like Trend Strength ──────────────────────────────────
-        # Simplified: use rolling std of returns as proxy for directional move
-        if "returns" in df.columns:
-            recent_returns = df["returns"].iloc[-14:].dropna()
-            mean_ret = recent_returns.mean()
-            trend_strength = abs(mean_ret) / max(recent_returns.std(), 1e-8)
-        else:
-            trend_strength = 1.0
+        if not window_signals:
+            return Signal(symbol, "HOLD", 0.0, self.name, "No valid windows")
 
-        # Only generate strong signals when trend is clear
-        trend_scalar = min(trend_strength / 2.0, 1.0)
+        # -- Equal-weight combination of lookback windows --
+        raw_composite = np.mean(list(window_signals.values()))
 
-        # ── Volume Confirmation ──────────────────────────────────────
-        vol_confirm = 1.0
-        if "Vol_ratio" in df.columns:
-            vr = df["Vol_ratio"].iloc[-1]
-            if not np.isnan(vr):
-                vol_confirm = min(vr, 2.0) / 2.0  # normalize 0-1
+        # -- Volatility scaling --
+        # Scale signal strength by inverse of realized volatility
+        vol_scalar = self._volatility_scalar(df)
+        scaled_composite = raw_composite * vol_scalar
 
-        # ── Composite Signal ─────────────────────────────────────────
-        raw = (
-            0.35 * ma_signal
-            + 0.30 * macd_signal_val
-            + 0.20 * roc_signal
-            + 0.15 * (ma_signal * vol_confirm)  # volume-confirmed trend
-        )
-        composite = np.clip(raw * trend_scalar, -1.0, 1.0)
+        # -- Momentum acceleration (2nd derivative) --
+        # Is momentum getting stronger or weaker?
+        acceleration = self._momentum_acceleration(close)
+        if acceleration > 0 and raw_composite > 0:
+            scaled_composite *= 1.15  # Boost when accelerating in trend direction
+        elif acceleration < 0 and raw_composite > 0:
+            scaled_composite *= 0.85  # Reduce when decelerating
 
-        # ── Decision ─────────────────────────────────────────────────
-        if composite > 0.25:
+        # -- Volume confirmation --
+        vol_confirm = self._volume_confirmation(df)
+        scaled_composite *= vol_confirm
+
+        # -- Moving average trend filter --
+        # Only take momentum trades in direction of longer-term trend
+        trend_filter = self._trend_filter(df)
+        if trend_filter * scaled_composite < 0:
+            # Momentum opposes the longer-term trend -> reduce conviction
+            scaled_composite *= 0.5
+
+        composite = np.clip(scaled_composite, -1.0, 1.0)
+
+        # -- Decision --
+        ret_strs = [f"{n}={r:.3f}" for n, r in window_returns.items()]
+        if composite > 0.2:
             action = "BUY"
             reason = (
-                f"Momentum BUY: MA_sig={ma_signal:.2f}, "
-                f"MACD={macd_signal_val:.2f}, ROC={roc:.4f}"
+                f"TSMOM BUY: {', '.join(ret_strs)}, "
+                f"vol_scalar={vol_scalar:.2f}, accel={acceleration:.4f}"
             )
-        elif composite < -0.25:
+        elif composite < -0.2:
             action = "SELL"
             reason = (
-                f"Momentum SELL: MA_sig={ma_signal:.2f}, "
-                f"MACD={macd_signal_val:.2f}, ROC={roc:.4f}"
+                f"TSMOM SELL: {', '.join(ret_strs)}, "
+                f"vol_scalar={vol_scalar:.2f}, accel={acceleration:.4f}"
             )
         else:
             action = "HOLD"
-            reason = f"Weak trend: composite={composite:.3f}"
+            reason = f"Weak TSMOM: composite={composite:.3f}"
 
         return Signal(symbol, action, composite, self.name, reason)
 
-    def detect_breakout(
-        self, df: pd.DataFrame, lookback: int = 20
+    def _volatility_scalar(self, df: pd.DataFrame) -> float:
+        """
+        Compute inverse-volatility scalar.
+
+        Position sizes are scaled so that the risk contribution is roughly
+        constant across different volatility regimes. Target = vol_target.
+        """
+        if "returns" not in df.columns or len(df) < 21:
+            return 1.0
+
+        recent_vol = df["returns"].iloc[-21:].std() * np.sqrt(252)
+        if recent_vol < 0.01:
+            return 1.0
+
+        scalar = self.vol_target / recent_vol
+        # Cap the scalar to avoid extreme leverage
+        return np.clip(scalar, 0.3, 2.0)
+
+    def _momentum_acceleration(
+        self, close: np.ndarray, short: int = 5, long: int = 21
     ) -> float:
         """
-        Detect price breakout above/below recent range.
-        Returns breakout strength: >0 bullish, <0 bearish.
+        Measure momentum acceleration: is the trend speeding up or slowing?
+
+        Compares short-term momentum to medium-term momentum.
+        Positive = accelerating, Negative = decelerating.
         """
-        if len(df) < lookback + 1:
-            return 0.0
-        recent_high = df["High"].iloc[-lookback - 1:-1].max()
-        recent_low = df["Low"].iloc[-lookback - 1:-1].min()
-        current = df["Close"].iloc[-1]
-        range_size = recent_high - recent_low
-        if range_size <= 0:
+        if len(close) < long + 1:
             return 0.0
 
-        if current > recent_high:
-            return min((current - recent_high) / range_size, 1.0)
-        elif current < recent_low:
-            return max((current - recent_low) / range_size, -1.0)
-        return 0.0
+        short_mom = (close[-1] - close[-short]) / close[-short]
+        long_mom = (close[-1] - close[-long]) / close[-long]
+        long_normalized = long_mom * (short / long)  # Normalize to same timeframe
+
+        return short_mom - long_normalized
+
+    def _volume_confirmation(self, df: pd.DataFrame) -> float:
+        """
+        Volume confirmation: higher conviction when volume supports the move.
+
+        Returns a multiplier between 0.7 (low volume, less conviction)
+        and 1.3 (high volume, more conviction).
+        """
+        if "Vol_ratio" not in df.columns:
+            return 1.0
+
+        vr = df["Vol_ratio"].iloc[-1]
+        if np.isnan(vr):
+            return 1.0
+
+        # Above-average volume = more conviction
+        if vr > 1.5:
+            return 1.2
+        elif vr > 1.0:
+            return 1.0 + (vr - 1.0) * 0.4
+        elif vr < 0.5:
+            return 0.7
+        else:
+            return 0.7 + vr * 0.6
+
+    def _trend_filter(self, df: pd.DataFrame) -> float:
+        """
+        Longer-term trend filter using 200-day SMA slope.
+
+        Returns +1 if above 200 SMA (uptrend), -1 if below (downtrend).
+        Used to avoid counter-trend momentum trades.
+        """
+        close = df["Close"].values
+        if len(close) < 200:
+            return 0.0
+
+        sma_200 = np.mean(close[-200:])
+        if sma_200 <= 0:
+            return 0.0
+
+        return 1.0 if close[-1] > sma_200 else -1.0

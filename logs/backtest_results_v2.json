@@ -1,0 +1,52 @@
+{
+  "period": "2015-01-01 to 2025-12-31",
+  "trading_days": 2870,
+  "years": 11.38888888888889,
+  "initial_capital": 100000.0,
+  "final_value": 941916.1159094758,
+  "total_return": 8.419161159094758,
+  "cagr": 0.21765154701001577,
+  "sharpe_ratio": 2.2479010774307255,
+  "sortino_ratio": 3.3389184280050603,
+  "max_drawdown": 0.07631100083108072,
+  "calmar_ratio": 2.8521647552729834,
+  "total_trades": 20608,
+  "win_rate": 0.6254501800720288,
+  "avg_win": 367.7685264061429,
+  "avg_loss": -398.59847380182,
+  "profit_factor": 0.9226541258384108,
+  "alpha_vs_spy": 0.08947446442187168,
+  "spy_cagr": 0.1281770825881441,
+  "spy_sharpe": 0.44780781975779493,
+  "spy_max_dd": 0.8053141791102004,
+  "strategy_attribution": {
+    "mean_reversion": {
+      "pnl": 60639.58594577029,
+      "trades": 746
+    },
+    "momentum": {
+      "pnl": 83283.62950894421,
+      "trades": 2027
+    },
+    "sentiment": {
+      "pnl": 350085.563904176,
+      "trades": 3394
+    },
+    "pattern_recognition": {
+      "pnl": 380172.04024973256,
+      "trades": 3620
+    }
+  },
+  "regime_distribution": {
+    "mean_reverting": 0.12125435540069686,
+    "trending_up": 0.6567944250871081,
+    "trending_down": 0.17317073170731706,
+    "crisis": 0.04878048780487805
+  },
+  "kelly_stats": {
+    "win_rate": 0.52,
+    "payoff_ratio": 1.3571641510095824,
+    "kelly_pct": 0.16632133876883487
+  },
+  "elapsed_seconds": 69.12862944602966
+}
