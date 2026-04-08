@@ -1,0 +1,618 @@
+[
+  {
+    "name": "Buy & Hold",
+    "description": "SPY Buy & Hold Benchmark",
+    "initial_capital": 10000.0,
+    "final_value": 180631.0510964251,
+    "total_return": 17.06310510964251,
+    "total_return_pct": "1706.3%",
+    "cagr": 0.1002664301819689,
+    "cagr_pct": "10.03%",
+    "sharpe_ratio": 0.7551515284394965,
+    "sortino_ratio": 1.1387673838572883,
+    "max_drawdown": 0.41668539176677244,
+    "max_drawdown_pct": "41.67%",
+    "calmar_ratio": 0.24062861852879672,
+    "n_years": 30.285714285714285,
+    "total_trades": 0,
+    "win_rate": 0,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "profit_factor": Infinity,
+    "ten_k_becomes": "$180,631",
+    "era_performance": {
+      "Dot-Com Boom": {
+        "return": 1.4626966870671523,
+        "return_pct": "146.3%",
+        "max_drawdown": 0.10054828514749899,
+        "max_drawdown_pct": "10.1%",
+        "start_value": "$10,000",
+        "end_value": "$24,627"
+      },
+      "Dot-Com Crash": {
+        "return": 0.1130123633676146,
+        "return_pct": "11.3%",
+        "max_drawdown": 0.22148108897838562,
+        "max_drawdown_pct": "22.1%",
+        "start_value": "$24,549",
+        "end_value": "$27,323"
+      },
+      "Recovery": {
+        "return": 0.26089388293094196,
+        "return_pct": "26.1%",
+        "max_drawdown": 0.07902942178971481,
+        "max_drawdown_pct": "7.9%",
+        "start_value": "$97,024",
+        "end_value": "$122,336"
+      },
+      "Financial Crisis": {
+        "return": -0.032119205795316665,
+        "return_pct": "-3.2%",
+        "max_drawdown": 0.3271674005092318,
+        "max_drawdown_pct": "32.7%",
+        "start_value": "$50,173",
+        "end_value": "$48,562"
+      },
+      "Bull Market": {
+        "return": 1.4511912561050737,
+        "return_pct": "145.1%",
+        "max_drawdown": 0.1888654547290304,
+        "max_drawdown_pct": "18.9%",
+        "start_value": "$48,725",
+        "end_value": "$119,434"
+      },
+      "COVID": {
+        "return": -0.21252225933766167,
+        "return_pct": "-21.3%",
+        "max_drawdown": 0.39173760358035786,
+        "max_drawdown_pct": "39.2%",
+        "start_value": "$123,168",
+        "end_value": "$96,992"
+      },
+      "Bear Market": {
+        "return": -0.2201787333461692,
+        "return_pct": "-22.0%",
+        "max_drawdown": 0.34335737120565774,
+        "max_drawdown_pct": "34.3%",
+        "start_value": "$122,276",
+        "end_value": "$95,354"
+      },
+      "AI Rally": {
+        "return": 0.9008006654275242,
+        "return_pct": "90.1%",
+        "max_drawdown": 0.0815697099714298,
+        "max_drawdown_pct": "8.2%",
+        "start_value": "$95,029",
+        "end_value": "$180,631"
+      }
+    }
+  },
+  {
+    "name": "Original Momentum",
+    "description": "TSMOM with vol scaling, acceleration, volume confirmation",
+    "initial_capital": 10000.0,
+    "final_value": 15504.136954178615,
+    "total_return": 0.5504136954178616,
+    "total_return_pct": "55.0%",
+    "cagr": 0.01458482890122248,
+    "cagr_pct": "1.46%",
+    "sharpe_ratio": 0.7707718541708407,
+    "sortino_ratio": 0.9398692161076124,
+    "max_drawdown": 0.03434659250427098,
+    "max_drawdown_pct": "3.43%",
+    "calmar_ratio": 0.4246368515132575,
+    "n_years": 30.285714285714285,
+    "total_trades": 86,
+    "win_rate": 0.5348837209302325,
+    "avg_win": 326.1223711318416,
+    "avg_loss": -99.83387909268693,
+    "profit_factor": 3.266650300436246,
+    "ten_k_becomes": "$15,504",
+    "era_performance": {
+      "Dot-Com Boom": {
+        "return": 0.22222114896411113,
+        "return_pct": "22.2%",
+        "max_drawdown": 0.031602803087513065,
+        "max_drawdown_pct": "3.2%",
+        "start_value": "$10,000",
+        "end_value": "$12,222"
+      },
+      "Dot-Com Crash": {
+        "return": -0.004588889313149767,
+        "return_pct": "-0.5%",
+        "max_drawdown": 0.023978832782857964,
+        "max_drawdown_pct": "2.4%",
+        "start_value": "$12,209",
+        "end_value": "$12,153"
+      },
+      "Recovery": {
+        "return": 0.007851749248733043,
+        "return_pct": "0.8%",
+        "max_drawdown": 0.0051467966661314325,
+        "max_drawdown_pct": "0.5%",
+        "start_value": "$14,613",
+        "end_value": "$14,728"
+      },
+      "Financial Crisis": {
+        "return": -0.0020329881888247036,
+        "return_pct": "-0.2%",
+        "max_drawdown": 0.009129630336451526,
+        "max_drawdown_pct": "0.9%",
+        "start_value": "$13,300",
+        "end_value": "$13,273"
+      },
+      "Bull Market": {
+        "return": 0.06422163918561409,
+        "return_pct": "6.4%",
+        "max_drawdown": 0.03266468928829353,
+        "max_drawdown_pct": "3.3%",
+        "start_value": "$13,277",
+        "end_value": "$14,130"
+      },
+      "COVID": {
+        "return": 0.025737188259448287,
+        "return_pct": "2.6%",
+        "max_drawdown": 0.022710356345963422,
+        "max_drawdown_pct": "2.3%",
+        "start_value": "$14,247",
+        "end_value": "$14,613"
+      },
+      "Bear Market": {
+        "return": -0.010899201607611327,
+        "return_pct": "-1.1%",
+        "max_drawdown": 0.013604995149803522,
+        "max_drawdown_pct": "1.4%",
+        "start_value": "$14,727",
+        "end_value": "$14,567"
+      },
+      "AI Rally": {
+        "return": 0.06433855026351526,
+        "return_pct": "6.4%",
+        "max_drawdown": 0.024467250628127896,
+        "max_drawdown_pct": "2.4%",
+        "start_value": "$14,567",
+        "end_value": "$15,504"
+      }
+    }
+  },
+  {
+    "name": "Original Mean Reversion",
+    "description": "Z-score stat-arb with dynamic thresholds and RSI",
+    "initial_capital": 10000.0,
+    "final_value": 11594.247596132367,
+    "total_return": 0.1594247596132367,
+    "total_return_pct": "15.9%",
+    "cagr": 0.004896230083107023,
+    "cagr_pct": "0.49%",
+    "sharpe_ratio": 0.5888634283565329,
+    "sortino_ratio": 0.5069301240003495,
+    "max_drawdown": 0.02486259598245576,
+    "max_drawdown_pct": "2.49%",
+    "calmar_ratio": 0.19693157088511745,
+    "n_years": 30.285714285714285,
+    "total_trades": 190,
+    "win_rate": 0.7052631578947368,
+    "avg_win": 42.62884335687813,
+    "avg_loss": -45.06731817065997,
+    "profit_factor": 0.9458926132558436,
+    "ten_k_becomes": "$11,594",
+    "era_performance": {
+      "Dot-Com Boom": {
+        "return": 0.03108218202901262,
+        "return_pct": "3.1%",
+        "max_drawdown": 0.005759062075396102,
+        "max_drawdown_pct": "0.6%",
+        "start_value": "$10,000",
+        "end_value": "$10,311"
+      },
+      "Dot-Com Crash": {
+        "return": 0.013757116378150414,
+        "return_pct": "1.4%",
+        "max_drawdown": 0.021071699951612722,
+        "max_drawdown_pct": "2.1%",
+        "start_value": "$10,311",
+        "end_value": "$10,453"
+      },
+      "Recovery": {
+        "return": 0.015646784618980652,
+        "return_pct": "1.6%",
+        "max_drawdown": 0.0018391076813754975,
+        "max_drawdown_pct": "0.2%",
+        "start_value": "$11,123",
+        "end_value": "$11,297"
+      },
+      "Financial Crisis": {
+        "return": 0.014847676243221052,
+        "return_pct": "1.5%",
+        "max_drawdown": 0.018461428462435748,
+        "max_drawdown_pct": "1.8%",
+        "start_value": "$10,689",
+        "end_value": "$10,848"
+      },
+      "Bull Market": {
+        "return": 0.033496895531107795,
+        "return_pct": "3.3%",
+        "max_drawdown": 0.012656426211866469,
+        "max_drawdown_pct": "1.3%",
+        "start_value": "$10,848",
+        "end_value": "$11,212"
+      },
+      "COVID": {
+        "return": -0.007921085332638876,
+        "return_pct": "-0.8%",
+        "max_drawdown": 0.02486259598245576,
+        "max_drawdown_pct": "2.5%",
+        "start_value": "$11,212",
+        "end_value": "$11,123"
+      },
+      "Bear Market": {
+        "return": -0.0074373910211156325,
+        "return_pct": "-0.7%",
+        "max_drawdown": 0.012867035471397706,
+        "max_drawdown_pct": "1.3%",
+        "start_value": "$11,297",
+        "end_value": "$11,213"
+      },
+      "AI Rally": {
+        "return": 0.03425843468242484,
+        "return_pct": "3.4%",
+        "max_drawdown": 0.005605773200025617,
+        "max_drawdown_pct": "0.6%",
+        "start_value": "$11,210",
+        "end_value": "$11,594"
+      }
+    }
+  },
+  {
+    "name": "Original Factor Momentum",
+    "description": "Multi-factor (momentum, value, quality, reversal)",
+    "initial_capital": 10000.0,
+    "final_value": 13322.458409442786,
+    "total_return": 0.33224584094427867,
+    "total_return_pct": "33.2%",
+    "cagr": 0.009516995852365318,
+    "cagr_pct": "0.95%",
+    "sharpe_ratio": 0.643958173155466,
+    "sortino_ratio": 0.8155797504435177,
+    "max_drawdown": 0.10391226257723933,
+    "max_drawdown_pct": "10.39%",
+    "calmar_ratio": 0.09158684082440426,
+    "n_years": 30.285714285714285,
+    "total_trades": 108,
+    "win_rate": 0.6296296296296297,
+    "avg_win": 166.50344466221898,
+    "avg_loss": -116.93293545363322,
+    "profit_factor": 1.423922558826394,
+    "ten_k_becomes": "$13,322",
+    "era_performance": {
+      "Dot-Com Boom": {
+        "return": 0.10807343152940284,
+        "return_pct": "10.8%",
+        "max_drawdown": 0.011838827030547032,
+        "max_drawdown_pct": "1.2%",
+        "start_value": "$10,000",
+        "end_value": "$11,081"
+      },
+      "Dot-Com Crash": {
+        "return": 0.0643758003390646,
+        "return_pct": "6.4%",
+        "max_drawdown": 0.020071506866894205,
+        "max_drawdown_pct": "2.0%",
+        "start_value": "$11,077",
+        "end_value": "$11,790"
+      },
+      "Recovery": {
+        "return": 0.011005287027364502,
+        "return_pct": "1.1%",
+        "max_drawdown": 0.005555616521786167,
+        "max_drawdown_pct": "0.6%",
+        "start_value": "$13,202",
+        "end_value": "$13,347"
+      },
+      "Financial Crisis": {
+        "return": -0.003664121690515408,
+        "return_pct": "-0.4%",
+        "max_drawdown": 0.03830426526558634,
+        "max_drawdown_pct": "3.8%",
+        "start_value": "$12,519",
+        "end_value": "$12,473"
+      },
+      "Bull Market": {
+        "return": 0.1050917860652177,
+        "return_pct": "10.5%",
+        "max_drawdown": 0.027977781643350484,
+        "max_drawdown_pct": "2.8%",
+        "start_value": "$12,473",
+        "end_value": "$13,784"
+      },
+      "COVID": {
+        "return": -0.04427992042953932,
+        "return_pct": "-4.4%",
+        "max_drawdown": 0.0660865415347896,
+        "max_drawdown_pct": "6.6%",
+        "start_value": "$13,813",
+        "end_value": "$13,202"
+      },
+      "Bear Market": {
+        "return": -0.049475091235878885,
+        "return_pct": "-4.9%",
+        "max_drawdown": 0.06127218448683672,
+        "max_drawdown_pct": "6.1%",
+        "start_value": "$13,346",
+        "end_value": "$12,686"
+      },
+      "AI Rally": {
+        "return": 0.050191765794507195,
+        "return_pct": "5.0%",
+        "max_drawdown": 0.007156659298343574,
+        "max_drawdown_pct": "0.7%",
+        "start_value": "$12,686",
+        "end_value": "$13,322"
+      }
+    }
+  },
+  {
+    "name": "Dual Momentum (GEM+VAA)",
+    "description": "Antonacci absolute+relative momentum with Keller VAA breadth",
+    "initial_capital": 10000.0,
+    "final_value": 15412.083924719303,
+    "total_return": 0.5412083924719303,
+    "total_return_pct": "54.1%",
+    "cagr": 0.01438535282818898,
+    "cagr_pct": "1.44%",
+    "sharpe_ratio": 0.7775210334058186,
+    "sortino_ratio": 0.9546760861638417,
+    "max_drawdown": 0.03684563488009331,
+    "max_drawdown_pct": "3.68%",
+    "calmar_ratio": 0.3904221728029171,
+    "n_years": 30.285714285714285,
+    "total_trades": 78,
+    "win_rate": 0.6153846153846154,
+    "avg_win": 311.2065297360868,
+    "avg_loss": -137.12485259645172,
+    "profit_factor": 2.269512228041875,
+    "ten_k_becomes": "$15,412",
+    "era_performance": {
+      "Dot-Com Boom": {
+        "return": 0.2261529314871621,
+        "return_pct": "22.6%",
+        "max_drawdown": 0.03155473814017377,
+        "max_drawdown_pct": "3.2%",
+        "start_value": "$10,000",
+        "end_value": "$12,262"
+      },
+      "Dot-Com Crash": {
+        "return": -0.012404303112033452,
+        "return_pct": "-1.2%",
+        "max_drawdown": 0.027363964895785395,
+        "max_drawdown_pct": "2.7%",
+        "start_value": "$12,249",
+        "end_value": "$12,097"
+      },
+      "Recovery": {
+        "return": 0.005176800918629328,
+        "return_pct": "0.5%",
+        "max_drawdown": 0.005172459231719101,
+        "max_drawdown_pct": "0.5%",
+        "start_value": "$14,579",
+        "end_value": "$14,655"
+      },
+      "Financial Crisis": {
+        "return": -0.00434653142424857,
+        "return_pct": "-0.4%",
+        "max_drawdown": 0.011465034229242973,
+        "max_drawdown_pct": "1.1%",
+        "start_value": "$13,254",
+        "end_value": "$13,196"
+      },
+      "Bull Market": {
+        "return": 0.0678951802127126,
+        "return_pct": "6.8%",
+        "max_drawdown": 0.03684563488009331,
+        "max_drawdown_pct": "3.7%",
+        "start_value": "$13,200",
+        "end_value": "$14,096"
+      },
+      "COVID": {
+        "return": 0.025798439403232117,
+        "return_pct": "2.6%",
+        "max_drawdown": 0.022762999936806864,
+        "max_drawdown_pct": "2.3%",
+        "start_value": "$14,213",
+        "end_value": "$14,579"
+      },
+      "Bear Market": {
+        "return": -0.009502813420499962,
+        "return_pct": "-1.0%",
+        "max_drawdown": 0.01222590403957608,
+        "max_drawdown_pct": "1.2%",
+        "start_value": "$14,654",
+        "end_value": "$14,515"
+      },
+      "AI Rally": {
+        "return": 0.061797106631436366,
+        "return_pct": "6.2%",
+        "max_drawdown": 0.013853558058698747,
+        "max_drawdown_pct": "1.4%",
+        "start_value": "$14,515",
+        "end_value": "$15,412"
+      }
+    }
+  },
+  {
+    "name": "Cross-Asset Enhanced",
+    "description": "Momentum + cross-asset vol/trend risk overlay",
+    "initial_capital": 10000.0,
+    "final_value": 16064.954616407864,
+    "total_return": 0.6064954616407864,
+    "total_return_pct": "60.6%",
+    "cagr": 0.0157759080606108,
+    "cagr_pct": "1.58%",
+    "sharpe_ratio": 0.8168132031177119,
+    "sortino_ratio": 1.017779801668833,
+    "max_drawdown": 0.04165696152944937,
+    "max_drawdown_pct": "4.17%",
+    "calmar_ratio": 0.3787100038359261,
+    "n_years": 30.285714285714285,
+    "total_trades": 84,
+    "win_rate": 0.5714285714285714,
+    "avg_win": 338.5213424097764,
+    "avg_loss": -114.41986674593149,
+    "profit_factor": 2.958588853817324,
+    "ten_k_becomes": "$16,065",
+    "era_performance": {
+      "Dot-Com Boom": {
+        "return": 0.26018331474964196,
+        "return_pct": "26.0%",
+        "max_drawdown": 0.03122233411618023,
+        "max_drawdown_pct": "3.1%",
+        "start_value": "$10,000",
+        "end_value": "$12,602"
+      },
+      "Dot-Com Crash": {
+        "return": -0.012800353084204874,
+        "return_pct": "-1.3%",
+        "max_drawdown": 0.027828221960903572,
+        "max_drawdown_pct": "2.8%",
+        "start_value": "$12,589",
+        "end_value": "$12,428"
+      },
+      "Recovery": {
+        "return": 0.007291091360889975,
+        "return_pct": "0.7%",
+        "max_drawdown": 0.004985803563686766,
+        "max_drawdown_pct": "0.5%",
+        "start_value": "$15,094",
+        "end_value": "$15,204"
+      },
+      "Financial Crisis": {
+        "return": -0.009197855669295618,
+        "return_pct": "-0.9%",
+        "max_drawdown": 0.014137857899618599,
+        "max_drawdown_pct": "1.4%",
+        "start_value": "$13,800",
+        "end_value": "$13,673"
+      },
+      "Bull Market": {
+        "return": 0.06708143651682219,
+        "return_pct": "6.7%",
+        "max_drawdown": 0.04165696152944937,
+        "max_drawdown_pct": "4.2%",
+        "start_value": "$13,676",
+        "end_value": "$14,593"
+      },
+      "COVID": {
+        "return": 0.026075297110639627,
+        "return_pct": "2.6%",
+        "max_drawdown": 0.022012786264082658,
+        "max_drawdown_pct": "2.2%",
+        "start_value": "$14,710",
+        "end_value": "$15,094"
+      },
+      "Bear Market": {
+        "return": -0.010224124038470152,
+        "return_pct": "-1.0%",
+        "max_drawdown": 0.013230372106287639,
+        "max_drawdown_pct": "1.3%",
+        "start_value": "$15,203",
+        "end_value": "$15,048"
+      },
+      "AI Rally": {
+        "return": 0.06778291380749357,
+        "return_pct": "6.8%",
+        "max_drawdown": 0.023700451270916446,
+        "max_drawdown_pct": "2.4%",
+        "start_value": "$15,045",
+        "end_value": "$16,065"
+      }
+    }
+  },
+  {
+    "name": "Enhanced Ensemble",
+    "description": "All strategies + dual momentum overlay + cross-asset + adaptive allocation",
+    "initial_capital": 10000.0,
+    "final_value": 13643.421406728734,
+    "total_return": 0.3643421406728734,
+    "total_return_pct": "36.4%",
+    "cagr": 0.010310843922309854,
+    "cagr_pct": "1.03%",
+    "sharpe_ratio": 0.7366008717472615,
+    "sortino_ratio": 0.9303810786520543,
+    "max_drawdown": 0.04053111092722506,
+    "max_drawdown_pct": "4.05%",
+    "calmar_ratio": 0.25439332123965985,
+    "n_years": 30.285714285714285,
+    "total_trades": 60,
+    "win_rate": 0.6666666666666666,
+    "avg_win": 235.13496438863436,
+    "avg_loss": -105.9277881043948,
+    "profit_factor": 2.2197665843536942,
+    "ten_k_becomes": "$13,643",
+    "era_performance": {
+      "Dot-Com Boom": {
+        "return": 0.13203450522875645,
+        "return_pct": "13.2%",
+        "max_drawdown": 0.0156786702789176,
+        "max_drawdown_pct": "1.6%",
+        "start_value": "$10,000",
+        "end_value": "$11,320"
+      },
+      "Dot-Com Crash": {
+        "return": -0.011187347687990682,
+        "return_pct": "-1.1%",
+        "max_drawdown": 0.02280772175647794,
+        "max_drawdown_pct": "2.3%",
+        "start_value": "$11,314",
+        "end_value": "$11,187"
+      },
+      "Recovery": {
+        "return": 0.006673687492545484,
+        "return_pct": "0.7%",
+        "max_drawdown": 0.005950846784069814,
+        "max_drawdown_pct": "0.6%",
+        "start_value": "$12,653",
+        "end_value": "$12,737"
+      },
+      "Financial Crisis": {
+        "return": -0.013658640296167356,
+        "return_pct": "-1.4%",
+        "max_drawdown": 0.03809108765473055,
+        "max_drawdown_pct": "3.8%",
+        "start_value": "$11,840",
+        "end_value": "$11,678"
+      },
+      "Bull Market": {
+        "return": 0.08296555988714073,
+        "return_pct": "8.3%",
+        "max_drawdown": 0.030134793013931023,
+        "max_drawdown_pct": "3.0%",
+        "start_value": "$11,678",
+        "end_value": "$12,647"
+      },
+      "COVID": {
+        "return": -0.0018071059954676645,
+        "return_pct": "-0.2%",
+        "max_drawdown": 0.014461451894592001,
+        "max_drawdown_pct": "1.4%",
+        "start_value": "$12,676",
+        "end_value": "$12,653"
+      },
+      "Bear Market": {
+        "return": -0.012076425502302436,
+        "return_pct": "-1.2%",
+        "max_drawdown": 0.015200004697343762,
+        "max_drawdown_pct": "1.5%",
+        "start_value": "$12,737",
+        "end_value": "$12,583"
+      },
+      "AI Rally": {
+        "return": 0.08425987310492213,
+        "return_pct": "8.4%",
+        "max_drawdown": 0.013596054920188784,
+        "max_drawdown_pct": "1.4%",
+        "start_value": "$12,583",
+        "end_value": "$13,643"
+      }
+    }
+  }
+]

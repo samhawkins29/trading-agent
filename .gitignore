@@ -5,3 +5,4 @@ venv/
 *.log
 .pytest_cache/
 pytest-cache-files-*/
+node_modules/

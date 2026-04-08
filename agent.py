@@ -1,13 +1,18 @@
 """
-Main AI Trading Agent — the brain that combines all strategies.
+Main AI Trading Agent — Redesigned with Regime-Based Dynamic Weighting.
 
-This is the central decision engine. It:
-  1. Fetches latest market data for the trading universe
-  2. Runs all strategies to generate signals
-  3. Combines signals using learned weights (from self-improver)
-  4. Applies risk management checks
-  5. Executes trades via Alpaca paper trading API
-  6. Records outcomes for continuous self-improvement
+Key improvements over v1:
+  1. Regime detection drives strategy selection (momentum in trends, MR in ranges)
+  2. Factor Momentum replaces keyword-based sentiment
+  3. Kelly criterion + vol targeting for position sizing
+  4. Wider stop-losses prevent premature exits
+  5. Multi-timeframe momentum (1m, 3m, 6m, 12m lookback windows)
+  6. Dynamic strategy weights shift based on detected market regime
+
+Pipeline per cycle:
+  data -> indicators -> regime detection -> strategy signals ->
+  regime-weighted aggregation -> Kelly+vol position sizing ->
+  risk check -> execute -> log -> self-improve
 """
 
 import time
@@ -24,21 +29,27 @@ from config import (
     config,
 )
 from data_fetcher import DataFetcher
+from leverage_manager import LeverageConfig, LeverageManager
 from logger import TradeLogger
 from risk_manager import RiskManager
 from self_improver import SelfImprover
 from strategies.mean_reversion import MeanReversionStrategy, Signal
 from strategies.momentum import MomentumStrategy
-from strategies.pattern_recognition import PatternRecognitionStrategy
+from strategies.pattern_recognition import (
+    MarketRegime,
+    PatternRecognitionStrategy,
+)
 from strategies.sentiment import SentimentStrategy
 
 
 class TradingAgent:
     """
-    AI Trading Agent that orchestrates strategies, risk, and execution.
+    AI Trading Agent with regime-based dynamic strategy weighting.
 
-    Pipeline per cycle:
-      data → indicators → strategies → aggregate → risk check → execute → log
+    The agent detects the current market regime (trending, mean-reverting,
+    or crisis) and adjusts strategy weights accordingly. In trending markets,
+    momentum gets higher weight. In range-bound markets, mean reversion
+    dominates. In crisis, the agent goes defensive.
     """
 
     def __init__(
@@ -46,13 +57,26 @@ class TradingAgent:
         capital: float = config.initial_capital,
         paper_trade: bool = True,
     ):
-        # Core components
         self.logger = TradeLogger()
         self.data_fetcher = DataFetcher()
         self.risk_manager = RiskManager(capital, self.logger)
         self.self_improver = SelfImprover(self.logger)
 
-        # Strategies
+        # Leverage manager
+        lev_cfg = config.leverage
+        self.leverage_manager = LeverageManager(LeverageConfig(
+            mode=lev_cfg.get("mode", "none"),
+            fixed_multiplier=lev_cfg.get("fixed_multiplier", 3.0),
+            max_leverage=lev_cfg.get("max_leverage", 5.0),
+            vol_target_annual=lev_cfg.get("vol_target_annual", 0.15),
+            max_drawdown_trigger=lev_cfg.get("max_drawdown_trigger", 0.10),
+            ramp_days=lev_cfg.get("ramp_days", 5),
+            funding_cost_annual=lev_cfg.get("funding_cost_annual", 0.02),
+            min_leverage=lev_cfg.get("min_leverage", 0.5),
+        ))
+        self._daily_returns: list = []
+
+        # Strategies (redesigned)
         self.strategies = {
             "mean_reversion": MeanReversionStrategy(),
             "momentum": MomentumStrategy(),
@@ -67,22 +91,26 @@ class TradingAgent:
         # Tracking
         self.cycle_count = 0
         self.total_pnl = 0.0
+        self.current_regime = MarketRegime.MEAN_REVERTING
 
         self.logger.info("=" * 60)
-        self.logger.info("AI Trading Agent initialized")
+        self.logger.info("AI Trading Agent v2 initialized")
         self.logger.info(f"  Capital: ${capital:,.2f}")
         self.logger.info(f"  Symbols: {config.symbols}")
         self.logger.info(f"  Paper trade: {paper_trade}")
         self.logger.info(f"  Alpaca connected: {self.alpaca_available}")
         self.logger.info(f"  Strategy weights: {self.self_improver.weights}")
+        self.logger.info(f"  Kelly enabled: {config.use_kelly}")
+        self.logger.info(f"  Vol target: {config.vol_target:.0%}")
+        self.logger.info(f"  Regime weighting: {config.use_regime_weighting}")
+        self.logger.info(f"  Leverage mode: {lev_cfg.get('mode', 'none')}")
+        self.logger.info(f"  Max leverage: {lev_cfg.get('max_leverage', 5.0)}x")
         self.logger.info("=" * 60)
 
-    # ── Main Trading Loop ────────────────────────────────────────────
+    # -- Main Trading Loop --
+
     def run_cycle(self) -> Dict:
-        """
-        Execute one full trading cycle.
-        Returns a summary dict of actions taken.
-        """
+        """Execute one full trading cycle with regime-aware weighting."""
         self.cycle_count += 1
         cycle_start = time.time()
         self.logger.info(f"\n{'='*40} CYCLE {self.cycle_count} {'='*40}")
@@ -105,24 +133,30 @@ class TradingAgent:
                 self._execute_sell(symbol, price, "stop_loss_or_take_profit")
                 actions_taken["sells"].append(symbol)
 
-        # Step 2: Fetch data and generate signals for universe
+        # Step 2: Detect regime using SPY (market proxy)
+        regime = self._detect_market_regime()
+
+        # Step 3: Get regime-adjusted strategy weights
+        active_weights = self._get_active_weights(regime)
+
+        # Step 4: Analyze each symbol
         for symbol in config.symbols:
             try:
-                signal, meta = self._analyze_symbol(symbol)
+                signal, meta = self._analyze_symbol(symbol, active_weights)
                 if signal is None:
                     continue
 
                 can_trade, reason = self.risk_manager.can_trade(symbol)
                 if not can_trade:
-                    self.logger.debug(f"Cannot trade {symbol}: {reason}")
                     actions_taken["holds"].append(symbol)
                     continue
 
-                # Step 3: Execute based on signal
-                if signal.action == "BUY" and signal.strength > 0.3:
-                    self._execute_buy(symbol, signal, meta)
+                # Step 5: Execute based on signal
+                regime_str = regime.value if regime else "normal"
+                if signal.action == "BUY" and signal.strength > 0.25:
+                    self._execute_buy(symbol, signal, meta, regime_str)
                     actions_taken["buys"].append(symbol)
-                elif signal.action == "SELL" and signal.strength < -0.3:
+                elif signal.action == "SELL" and signal.strength < -0.25:
                     if symbol in self.risk_manager.positions:
                         price = meta.get("price", 0)
                         self._execute_sell(symbol, price, signal.reason)
@@ -133,14 +167,15 @@ class TradingAgent:
             except Exception as e:
                 self.logger.error(f"Error analyzing {symbol}: {e}")
 
-        # Step 4: Update self-improver weights periodically
+        # Step 6: Update self-improver weights periodically
         if self.cycle_count % 5 == 0:
-            self.self_improver.update_weights()
+            self.self_improver.update_weights(regime_name=regime.value)
 
-        # Step 5: Log performance snapshot
+        # Step 7: Log performance snapshot
         risk_status = self.risk_manager.get_status()
         self.logger.log_performance_snapshot({
             "cycle": self.cycle_count,
+            "regime": regime.value,
             "total_value": risk_status["total_value"],
             "capital": risk_status["capital"],
             "open_positions": risk_status["open_positions"],
@@ -148,20 +183,71 @@ class TradingAgent:
             "drawdown_pct": f"{risk_status['drawdown_pct']:.2%}",
             "buys": len(actions_taken["buys"]),
             "sells": len(actions_taken["sells"]),
+            "kelly": risk_status.get("kelly", {}),
         })
 
         elapsed = time.time() - cycle_start
         self.logger.info(f"Cycle {self.cycle_count} completed in {elapsed:.1f}s")
-
         return actions_taken
 
-    # ── Symbol Analysis ──────────────────────────────────────────────
+    # -- Regime Detection --
+
+    def _detect_market_regime(self) -> MarketRegime:
+        """
+        Detect overall market regime using SPY as proxy.
+
+        The regime detector (pattern_recognition strategy) analyzes
+        SPY's return distribution to classify the current environment.
+        """
+        try:
+            df_spy = self.data_fetcher.get_historical("SPY", period="2y")
+            if df_spy.empty or len(df_spy) < 100:
+                return MarketRegime.MEAN_REVERTING
+            df_spy = DataFetcher.compute_indicators(df_spy)
+            regime = self.strategies["pattern_recognition"].detect_regime(df_spy)
+            self.current_regime = regime
+            return regime
+        except Exception:
+            return self.current_regime
+
+    def _get_active_weights(self, regime: MarketRegime) -> Dict[str, float]:
+        """
+        Get strategy weights adjusted for current regime.
+
+        Blends the self-improver's learned weights with the regime
+        detector's recommended weights.
+        """
+        base_weights = self.self_improver.weights
+
+        if not config.use_regime_weighting:
+            return base_weights
+
+        regime_weights = self.strategies[
+            "pattern_recognition"
+        ].get_regime_weights(regime)
+
+        # Blend: (1-alpha) * learned_weights + alpha * regime_weights
+        alpha = config.regime_blend_alpha
+        blended = {}
+        for name in base_weights:
+            base = base_weights.get(name, 0.25)
+            regime_rec = regime_weights.get(name, 0.25)
+            blended[name] = (1 - alpha) * base + alpha * regime_rec
+
+        # Normalize
+        total = sum(blended.values())
+        if total > 0:
+            blended = {k: v / total for k, v in blended.items()}
+
+        return blended
+
+    # -- Symbol Analysis --
+
     def _analyze_symbol(
-        self, symbol: str
+        self, symbol: str, weights: Dict[str, float]
     ) -> Tuple[Optional[Signal], Dict]:
-        """Run all strategies on a symbol and return combined signal."""
-        # Fetch historical data
-        df = self.data_fetcher.get_historical(symbol, period="6mo")
+        """Run all strategies on a symbol with regime-aware weighting."""
+        df = self.data_fetcher.get_historical(symbol, period="2y")
         if df.empty:
             return None, {}
 
@@ -175,36 +261,30 @@ class TradingAgent:
         # Collect signals from each strategy
         signals: Dict[str, Signal] = {}
 
-        # Mean reversion
         signals["mean_reversion"] = self.strategies[
             "mean_reversion"
         ].generate_signal(symbol, df)
 
-        # Momentum
-        signals["momentum"] = self.strategies["momentum"].generate_signal(
-            symbol, df
-        )
+        signals["momentum"] = self.strategies[
+            "momentum"
+        ].generate_signal(symbol, df)
 
-        # Sentiment (fetch news if API key is set)
-        articles = self.data_fetcher.get_news(symbol, days_back=3)
-        signals["sentiment"] = self.strategies["sentiment"].generate_signal(
-            symbol, articles
-        )
+        # Factor Momentum (pass DataFrame, not articles)
+        signals["sentiment"] = self.strategies[
+            "sentiment"
+        ].generate_signal(symbol, df)
 
-        # Pattern recognition
         signals["pattern_recognition"] = self.strategies[
             "pattern_recognition"
         ].generate_signal(symbol, df)
 
-        # ── Weighted Combination ─────────────────────────────────────
-        weights = self.self_improver.weights
+        # -- Weighted combination --
         combined_strength = sum(
             weights.get(name, 0) * sig.strength
             for name, sig in signals.items()
         )
         combined_strength = np.clip(combined_strength, -1.0, 1.0)
 
-        # Determine dominant strategy
         dominant = max(signals.items(), key=lambda x: abs(x[1].strength))
 
         if combined_strength > 0:
@@ -220,35 +300,41 @@ class TradingAgent:
             action=action,
             strength=combined_strength,
             strategy=f"combined({dominant[0]})",
-            reason=f"Weighted: {', '.join(reasons)}",
-        )
-
-        self.logger.debug(
-            f"{symbol}: {combined_signal.action} "
-            f"str={combined_signal.strength:.3f} | {combined_signal.reason}"
+            reason=f"Regime={self.current_regime.value}, Weighted: {', '.join(reasons)}",
         )
 
         return combined_signal, meta
 
-    # ── Execution ────────────────────────────────────────────────────
-    def _execute_buy(self, symbol: str, signal: Signal, meta: Dict):
-        """Execute a buy order."""
+    # -- Execution --
+
+    def _execute_buy(
+        self, symbol: str, signal: Signal, meta: Dict, regime: str = "normal"
+    ):
+        """Execute a buy order with Kelly + vol-targeted sizing, scaled by leverage."""
         price = meta["price"]
         atr = meta["atr"]
         volatility = meta["volatility"]
 
         quantity = self.risk_manager.calculate_position_size(
-            symbol, price, signal.strength, volatility
+            symbol, price, signal.strength, volatility, regime
         )
         if quantity <= 0:
             return
 
-        # Execute via Alpaca (paper) or simulate
+        # Apply leverage scaling
+        current_equity = self.risk_manager._portfolio_value_estimate()
+        leverage = self.leverage_manager.get_leverage(
+            current_equity=current_equity,
+            daily_returns=self._daily_returns,
+        )
+        quantity = int(quantity * leverage)
+        if quantity <= 0:
+            return
+
         executed_price = price
         if self.alpaca_available and self.paper_trade:
             executed_price = self._alpaca_order(symbol, quantity, "buy") or price
 
-        # Record position
         self.risk_manager.open_position(
             symbol, quantity, executed_price, signal.strategy, atr
         )
@@ -274,7 +360,6 @@ class TradingAgent:
         strategy = pos.strategy
         entry_price = pos.entry_price
 
-        # Execute via Alpaca or simulate
         executed_price = price
         if self.alpaca_available and self.paper_trade:
             executed_price = (
@@ -285,7 +370,6 @@ class TradingAgent:
         if pnl is not None:
             self.total_pnl += pnl
 
-        # Record experience for self-improvement
         holding_hours = (
             (datetime.now() - pos.entry_time).total_seconds() / 3600
         )
@@ -297,6 +381,7 @@ class TradingAgent:
             entry_price=entry_price,
             exit_price=executed_price,
             holding_period_hours=holding_hours,
+            market_regime=self.current_regime.value,
         )
 
         self.logger.log_trade(
@@ -310,9 +395,9 @@ class TradingAgent:
             reason=reason,
         )
 
-    # ── Alpaca API ───────────────────────────────────────────────────
+    # -- Alpaca API --
+
     def _check_alpaca(self) -> bool:
-        """Verify Alpaca API connection."""
         if ALPACA_API_KEY == "YOUR_ALPACA_API_KEY":
             return False
         try:
@@ -331,7 +416,6 @@ class TradingAgent:
     def _alpaca_order(
         self, symbol: str, qty: int, side: str
     ) -> Optional[float]:
-        """Submit a market order to Alpaca. Returns fill price or None."""
         try:
             resp = requests.post(
                 f"{ALPACA_BASE_URL}/v2/orders",
@@ -351,27 +435,27 @@ class TradingAgent:
             if resp.status_code in (200, 201):
                 order = resp.json()
                 self.logger.info(
-                    f"Alpaca order submitted: {side} {qty} {symbol} "
-                    f"(order_id={order.get('id', 'N/A')})"
+                    f"Alpaca order submitted: {side} {qty} {symbol}"
                 )
                 return float(order.get("filled_avg_price", 0)) or None
             else:
                 self.logger.warning(
-                    f"Alpaca order failed: {resp.status_code} {resp.text}"
+                    f"Alpaca order failed: {resp.status_code}"
                 )
         except Exception as e:
             self.logger.error(f"Alpaca order error: {e}")
         return None
 
-    # ── Status ───────────────────────────────────────────────────────
+    # -- Status --
+
     def get_status(self) -> Dict:
-        """Return comprehensive agent status."""
         risk = self.risk_manager.get_status()
         improver = self.self_improver.get_report()
         trades = self.logger.get_trade_summary()
         return {
             "cycle_count": self.cycle_count,
             "total_pnl": self.total_pnl,
+            "current_regime": self.current_regime.value,
             "risk": risk,
             "strategy_weights": improver["current_weights"],
             "strategy_stats": improver["strategy_stats"],
