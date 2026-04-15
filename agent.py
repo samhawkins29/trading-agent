@@ -153,10 +153,10 @@ class TradingAgent:
 
                 # Step 5: Execute based on signal
                 regime_str = regime.value if regime else "normal"
-                if signal.action == "BUY" and signal.strength > 0.25:
+                if signal.action == "BUY" and signal.strength > 0.10:
                     self._execute_buy(symbol, signal, meta, regime_str)
                     actions_taken["buys"].append(symbol)
-                elif signal.action == "SELL" and signal.strength < -0.25:
+                elif signal.action == "SELL" and signal.strength < -0.10:
                     if symbol in self.risk_manager.positions:
                         price = meta.get("price", 0)
                         self._execute_sell(symbol, price, signal.reason)
@@ -278,6 +278,15 @@ class TradingAgent:
             "pattern_recognition"
         ].generate_signal(symbol, df)
 
+        # --- Verbose signal logging (per-strategy) ---
+        for name, sig in signals.items():
+            w = weights.get(name, 0)
+            self.logger.info(
+                f"  {symbol} | {name:20s}: action={sig.action:4s} "
+                f"raw_strength={sig.strength:+.4f}  weight={w:.2f}  "
+                f"weighted={sig.strength * w:+.4f}"
+            )
+
         # -- Weighted combination --
         combined_strength = sum(
             weights.get(name, 0) * sig.strength
@@ -293,6 +302,12 @@ class TradingAgent:
             action = "SELL"
         else:
             action = "HOLD"
+
+        self.logger.info(
+            f"  {symbol} | COMBINED: strength={combined_strength:+.4f}  "
+            f"action={action}  dominant={dominant[0]}({dominant[1].strength:+.4f})  "
+            f"threshold=0.10"
+        )
 
         reasons = [f"{n}={s.strength:.2f}" for n, s in signals.items()]
         combined_signal = Signal(
