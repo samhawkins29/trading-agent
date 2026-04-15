@@ -37,6 +37,7 @@ class Position:
     take_profit: float
     trailing_stop: Optional[float] = None
     highest_price: Optional[float] = None
+    is_short: bool = False      # True for short positions
 
 
 class RiskManager:
@@ -265,15 +266,56 @@ class RiskManager:
             f"SL=${stop_loss:.2f} TP=${take_profit:.2f}"
         )
 
+    def open_short_position(
+        self,
+        symbol: str,
+        quantity: int,
+        price: float,
+        strategy: str,
+        atr: float,
+    ):
+        """Record a new short position. Stop is above entry; TP is below entry."""
+        stop_loss = price * (1 + config.stop_loss_pct)    # e.g. entry * 1.08
+        take_profit = price * (1 - config.take_profit_pct)  # e.g. entry * 0.80
+
+        # Widen stop if ATR-based distance is larger
+        if atr > 0:
+            atr_stop = price + 3.0 * atr
+            stop_loss = max(stop_loss, atr_stop)
+
+        self.positions[symbol] = Position(
+            symbol=symbol,
+            quantity=quantity,
+            entry_price=price,
+            entry_time=datetime.now(),
+            strategy=strategy,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            trailing_stop=None,
+            highest_price=None,
+            is_short=True,
+        )
+        self.daily_trades += 1
+        self.current_capital += quantity * price  # receive proceeds from short sale
+        self.logger.info(
+            f"Short opened: {quantity} {symbol} @ ${price:.2f} "
+            f"SL=${stop_loss:.2f} TP=${take_profit:.2f}"
+        )
+
     def close_position(self, symbol: str, price: float) -> Optional[float]:
-        """Close a position, record result, return P&L."""
+        """Close a position (long or short), record result, return P&L."""
         if symbol not in self.positions:
             return None
 
         pos = self.positions.pop(symbol)
-        pnl = (price - pos.entry_price) * pos.quantity
-        pct_return = (price - pos.entry_price) / pos.entry_price
-        self.current_capital += pos.quantity * price
+        if pos.is_short:
+            pnl = (pos.entry_price - price) * pos.quantity
+            pct_return = (pos.entry_price - price) / pos.entry_price
+            self.current_capital -= pos.quantity * price  # pay to cover short
+        else:
+            pnl = (price - pos.entry_price) * pos.quantity
+            pct_return = (price - pos.entry_price) / pos.entry_price
+            self.current_capital += pos.quantity * price
         self.daily_trades += 1
 
         # Record for Kelly estimation
@@ -295,8 +337,12 @@ class RiskManager:
         """
         Check all positions for stop-loss, take-profit, and trailing stops.
 
-        Trailing stop: track highest price since entry, stop at
-        highest_price - 3 * ATR (or a % of the gain).
+        Trailing stop (longs only): only activates after gain >= initial_risk
+        (1:1 R:R achieved), preventing the stop from tightening to within cents
+        of a newly opened position on the first tiny tick above entry.
+
+        Short positions use inverted logic: stop triggers if price rises above
+        stop_loss, take-profit triggers if price falls below take_profit.
         """
         to_close = []
         for symbol, pos in self.positions.items():
@@ -304,19 +350,38 @@ class RiskManager:
             if price is None:
                 continue
 
-            # Update trailing stop
+            if pos.is_short:
+                # Short: stop triggers on UPWARD move, TP triggers on DOWNWARD move
+                if price >= pos.stop_loss:
+                    self.logger.warning(
+                        f"SHORT STOP triggered for {symbol} @ ${price:.2f} "
+                        f"(stop=${pos.stop_loss:.2f})"
+                    )
+                    to_close.append(symbol)
+                elif price <= pos.take_profit:
+                    self.logger.info(
+                        f"SHORT TAKE PROFIT triggered for {symbol} @ ${price:.2f}"
+                    )
+                    to_close.append(symbol)
+                continue
+
+            # Long position trailing stop —————————————————————————————————
             if pos.highest_price is not None and price > pos.highest_price:
                 pos.highest_price = price
-                # Trail: lock in at least 50% of unrealized gains
                 gain = price - pos.entry_price
-                if gain > 0:
-                    trail_price = pos.entry_price + 0.5 * gain
+                initial_risk = pos.entry_price - pos.stop_loss  # e.g. 8% of entry
+
+                # Only trail once gain >= initial_risk (1:1 R:R achieved).
+                # This prevents the stop from jumping to breakeven on a +$0.12 tick.
+                if gain > 0 and initial_risk > 0 and gain >= initial_risk:
+                    # Lock in gains above the initial-risk threshold at 50%
+                    trail_price = pos.entry_price + initial_risk + 0.5 * (gain - initial_risk)
                     pos.trailing_stop = max(
                         pos.trailing_stop or pos.stop_loss,
-                        trail_price
+                        trail_price,
                     )
 
-            # Check triggers
+            # Effective stop is the higher of the hard stop and the trailing stop
             effective_stop = max(pos.stop_loss, pos.trailing_stop or 0)
 
             if price <= effective_stop:

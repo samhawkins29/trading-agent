@@ -15,14 +15,18 @@ from dataclasses import dataclass, field
 from typing import List
 
 # --- API Keys ---------------------------------------------------------------
-ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "PK32BQLC4JDJSY4I66DNU67VFF")
-ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "CtsArEvRWxS2cGAfiQHqhpuLHRknVBsbmqwXJWCgvyMU")
-ALPACA_BASE_URL = os.getenv(
-    "ALPACA_BASE_URL", "https://paper-api.alpaca.markets/v2"
-)
+ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "")
+ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "")
+ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 
-ALPHA_VANTAGE_KEY = os.getenv("ALPHA_VANTAGE_KEY", "8PF64WAGMI3H4HAK")
-NEWS_API_KEY = os.getenv("NEWS_API_KEY", "b01aab5002fe498f88479d18504af049")
+ALPHA_VANTAGE_KEY = os.getenv("ALPHA_VANTAGE_KEY", "")
+NEWS_API_KEY = os.getenv("NEWS_API_KEY", "")
+
+# Claude AI decision layer (agent_brain.py) and weekly review (weekly_review.py)
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+
+# Finnhub news integration (news_fetcher.py) — free tier, optional
+FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")
 
 
 # --- Trading Universe -------------------------------------------------------
@@ -33,8 +37,24 @@ class TradingConfig:
     # Symbols: diversified across sectors for pairs trading and factor exposure
     symbols: List[str] = field(
         default_factory=lambda: [
-            "AAPL", "MSFT", "GOOGL", "AMZN", "META",
-            "NVDA", "TSLA", "JPM", "V", "SPY",
+            # Large Cap Tech
+            'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA', 'AMD', 'NFLX', 'CRM',
+            # Financials & Blue Chips
+            'JPM', 'V', 'MA', 'GS', 'BAC', 'BRK-B',
+            # Growth & High Beta
+            'COIN', 'PLTR', 'SOFI', 'ARKK', 'MSTR',
+            # Consumer & Industrial
+            'COST', 'HD', 'DIS', 'BA', 'UNH',
+            # Energy
+            'XOM', 'CVX',
+            # Major ETFs
+            'SPY', 'QQQ', 'IWM', 'DIA',
+            # Sector ETFs
+            'XLK', 'XLF', 'XLE', 'XLV', 'XLI',
+            # Cross-Asset (bonds, gold, commodities)
+            'TLT', 'GLD', 'SLV', 'USO',
+            # Uncorrelated / Cross-Asset Diversifiers
+            'VXX', 'EEM', 'EFA', 'GBTC', 'IBIT', 'FXI', 'DBA', 'COPX', 'URA', 'SH', 'TQQQ',
         ]
     )
 
@@ -51,7 +71,7 @@ class TradingConfig:
     take_profit_pct: float = 0.20               # 20% take profit
     drawdown_scale_threshold: float = 0.04      # Start reducing at 4% DD
     drawdown_severe_threshold: float = 0.10     # Severe reduction at 10% DD
-    max_open_positions: int = 10
+    max_open_positions: int = 15
     max_daily_trades: int = 20
 
     # -- Kelly Criterion Position Sizing --
@@ -75,6 +95,9 @@ class TradingConfig:
             "pattern_recognition": 0.25, # Volatility-Regime Detection
         }
     )
+
+    # -- Shorting --
+    shorting_enabled: bool = True          # Allow brain to open short positions
 
     # -- Regime-Based Dynamic Weighting --
     use_regime_weighting: bool = True
@@ -117,11 +140,27 @@ class TradingConfig:
         default_factory=lambda: {
             # Symbols to paper trade (defaults to main symbols if empty)
             "symbols": [
-                "AAPL", "MSFT", "GOOGL", "AMZN", "META",
-                "NVDA", "TSLA", "JPM", "V", "SPY",
+                # Large Cap Tech
+                'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA', 'AMD', 'NFLX', 'CRM',
+                # Financials & Blue Chips
+                'JPM', 'V', 'MA', 'GS', 'BAC', 'BRK-B',
+                # Growth & High Beta
+                'COIN', 'PLTR', 'SOFI', 'ARKK', 'MSTR',
+                # Consumer & Industrial
+                'COST', 'HD', 'DIS', 'BA', 'UNH',
+                # Energy
+                'XOM', 'CVX',
+                # Major ETFs
+                'SPY', 'QQQ', 'IWM', 'DIA',
+                # Sector ETFs
+                'XLK', 'XLF', 'XLE', 'XLV', 'XLI',
+                # Cross-Asset (bonds, gold, commodities)
+                'TLT', 'GLD', 'SLV', 'USO',
+                # Uncorrelated / Cross-Asset Diversifiers
+                'VXX', 'EEM', 'EFA', 'GBTC', 'IBIT', 'FXI', 'DBA', 'COPX', 'URA', 'SH', 'TQQQ',
             ],
             # How often to run the trading cycle (minutes)
-            "interval_minutes": 15,
+            "interval_minutes": 5,
             # Market hours (Eastern Time)
             "market_open_hour": 9,
             "market_open_minute": 30,
@@ -142,5 +181,5 @@ class TradingConfig:
     )
 
 
-# Singleton instance
+# Single shared instance — importable as `from config import config`
 config = TradingConfig()
