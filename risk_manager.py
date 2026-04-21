@@ -351,6 +351,15 @@ class RiskManager:
                 continue
 
             if pos.is_short:
+                # Time-based exit: auto-close shorts held > 24 hours
+                hours_held = (datetime.now() - pos.entry_time).total_seconds() / 3600
+                if hours_held > 24:
+                    self.logger.info(
+                        f"SHORT_TIME_EXIT: {symbol} held {hours_held:.1f}h > 24h limit"
+                    )
+                    to_close.append(symbol)
+                    continue
+
                 # Short: stop triggers on UPWARD move, TP triggers on DOWNWARD move
                 if price >= pos.stop_loss:
                     self.logger.warning(
@@ -432,8 +441,24 @@ class RiskManager:
         )
 
     def _portfolio_value_estimate(self) -> float:
-        """Rough portfolio value = cash + position notional at entry."""
-        return self.current_capital + self._total_exposure()
+        """Rough portfolio value = cash + long notional - short notional (at entry).
+
+        current_capital already includes short-sale proceeds, so short notional
+        must be subtracted to avoid double-counting. Without this, every open
+        short inflates the estimate by 2x its notional value, which corrupts
+        peak_capital and causes false drawdown halts.
+        """
+        long_val = sum(
+            pos.quantity * pos.entry_price
+            for pos in self.positions.values()
+            if not pos.is_short
+        )
+        short_val = sum(
+            pos.quantity * pos.entry_price
+            for pos in self.positions.values()
+            if pos.is_short
+        )
+        return self.current_capital + long_val - short_val
 
     def get_kelly_stats(self) -> Dict:
         """Return current Kelly criterion statistics."""

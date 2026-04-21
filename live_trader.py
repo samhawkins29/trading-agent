@@ -922,7 +922,7 @@ class LiveTrader:
                     self._execute_sell(symbol, meta["price"], full_reason, actions)
                 elif existing_pos and existing_pos.is_short:
                     self.logger.info(f"  {symbol}: already short, ignoring additional SELL")
-                elif config.shorting_enabled and confidence > 0.60:
+                elif config.shorting_enabled and confidence > 0.80:
                     if not can_trade:
                         self.logger.info(f"  {symbol}: SKIP — brain SHORT but {skip_reason}")
                         continue
@@ -930,7 +930,7 @@ class LiveTrader:
                 else:
                     self.logger.info(
                         f"  {symbol}: Brain SELL — no position, "
-                        + ("low confidence ({confidence:.0%})" if confidence <= 0.60 else "shorting disabled")
+                        + ("low confidence ({confidence:.0%})" if confidence <= 0.80 else "shorting disabled")
                     )
 
     def _execute_short_entry(
@@ -959,7 +959,7 @@ class LiveTrader:
         leverage = self.leverage_manager.get_leverage(
             current_equity=equity, daily_returns=self._daily_returns
         )
-        quantity = int(quantity * leverage)
+        quantity = max(1, int(quantity * leverage) // 2)  # shorts capped at half long size
         if quantity <= 0:
             return
 
