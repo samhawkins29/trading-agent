@@ -9,6 +9,9 @@ numpy>=1.24.0
 # HTTP requests
 requests>=2.31.0
 
+# Environment variable loading from .env file
+python-dotenv>=1.0.0
+
 # Alpaca trading API (paper trading)
 alpaca-trade-api>=3.0.0
 

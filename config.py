@@ -12,7 +12,13 @@ Key changes from v1:
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import List
+
+from dotenv import load_dotenv
+
+# Load .env from project root before reading any env vars
+load_dotenv(dotenv_path=Path(__file__).parent / ".env", override=True)
 
 # --- API Keys ---------------------------------------------------------------
 ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "")
@@ -119,8 +125,8 @@ class TradingConfig:
     # -- Leverage --
     leverage: dict = field(
         default_factory=lambda: {
-            "mode": "vol_target",           # none, fixed, kelly, vol_target
-            "fixed_multiplier": 3.0,        # For fixed mode
+            "mode": "fixed",                # none, fixed, kelly, vol_target
+            "fixed_multiplier": 2.0,        # For fixed mode
             "max_leverage": 5.0,            # Hard cap on leverage
             "vol_target_annual": 0.15,      # Annual vol target for vol_target mode
             "max_drawdown_trigger": 0.10,   # Drawdown that triggers circuit breaker
