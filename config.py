@@ -70,7 +70,7 @@ class TradingConfig:
     data_granularity: str = "1d"
 
     # -- Risk Parameters (research-based, tuned via backtest) --
-    max_portfolio_pct_per_trade: float = 0.15   # Max 15% per position (core+satellite)
+    max_portfolio_pct_per_trade: float = 0.10   # Max 10% per position (core+satellite)
     # Cap on LEVERED notional deployed (see live_trader leverage multiply). At 0.80
     # this enforces a >=20% cash reserve as a drawdown buffer, since exposure is
     # summed AFTER the 2x leverage is applied to each position.

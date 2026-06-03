@@ -40,12 +40,12 @@ class TestTradingConfigDefaults:
         from config import TradingConfig
 
         cfg = TradingConfig()
-        assert cfg.max_portfolio_pct_per_trade == 0.05
-        assert cfg.max_total_exposure == 0.95
-        assert cfg.max_drawdown_pct == 0.10
-        assert cfg.stop_loss_pct == 0.03
-        assert cfg.take_profit_pct == 0.08
-        assert cfg.max_open_positions == 10
+        assert cfg.max_portfolio_pct_per_trade == 0.10
+        assert cfg.max_total_exposure == 0.80
+        assert cfg.max_drawdown_pct == 0.15
+        assert cfg.stop_loss_pct == 0.08
+        assert cfg.take_profit_pct == 0.20
+        assert cfg.max_open_positions == 15
         assert cfg.max_daily_trades == 20
 
     def test_default_strategy_weights_sum_to_one(self):
