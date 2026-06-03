@@ -71,7 +71,10 @@ class TradingConfig:
 
     # -- Risk Parameters (research-based, tuned via backtest) --
     max_portfolio_pct_per_trade: float = 0.15   # Max 15% per position (core+satellite)
-    max_total_exposure: float = 0.95
+    # Cap on LEVERED notional deployed (see live_trader leverage multiply). At 0.80
+    # this enforces a >=20% cash reserve as a drawdown buffer, since exposure is
+    # summed AFTER the 2x leverage is applied to each position.
+    max_total_exposure: float = 0.80
     max_drawdown_pct: float = 0.15              # Halt at 15% drawdown
     stop_loss_pct: float = 0.08                 # 8% stop loss (was 3% — too tight)
     take_profit_pct: float = 0.20               # 20% take profit
