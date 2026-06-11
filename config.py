@@ -83,6 +83,33 @@ class TradingConfig:
     max_open_positions: int = 15
     max_daily_trades: int = 20
 
+    # -- Broker-Native Resting Stops --
+    # When True, every opened position gets a GTC stop order submitted to the
+    # broker immediately after fill, so the stop rests at the exchange and
+    # protects the position overnight / on weekends / during agent downtime
+    # (the per-cycle polled stop only fires when a cycle runs). See
+    # live_trader._submit_resting_stop.
+    use_native_stops: bool = True
+
+    # -- Real-Time Kill Switch / Circuit Breaker --
+    # Independent of the per-cycle drawdown halt. When tripped it cancels all
+    # open orders, liquidates all positions, and writes a persistent halt flag
+    # that survives restarts (manual clearing required). Thresholds are checked
+    # against REAL broker equity.
+    kill_switch: dict = field(
+        default_factory=lambda: {
+            "enabled": True,
+            # Peak-to-trough drawdown on real equity that triggers liquidation.
+            # Set tighter than max_drawdown_pct (0.15) so the kill switch is a
+            # hard backstop, not a duplicate of the soft halt.
+            "max_drawdown_limit": 0.20,
+            # Intraday loss vs the day's starting equity that triggers liquidation.
+            "daily_loss_limit": 0.08,
+            # Absolute equity floor — liquidate if real equity falls below this.
+            "min_equity_floor": 0.0,
+        }
+    )
+
     # -- Kelly Criterion Position Sizing --
     use_kelly: bool = True
     kelly_fraction: float = 0.6          # 60% Kelly (slightly above half)

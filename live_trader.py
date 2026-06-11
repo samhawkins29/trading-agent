@@ -146,6 +146,21 @@ class LiveTrader:
         # _review_open_positions to detect thesis reversal on shorts.
         self._brain_buy_streak: Dict[str, int] = {}
 
+        # Broker-native resting stops: {symbol: broker_stop_order_id}. Each open
+        # position gets a GTC stop order resting at the broker so it is
+        # protected even when no cycle is running. Cancelled when the position
+        # is closed by any other path.
+        self._resting_stops: Dict[str, str] = {}
+
+        # Real-time kill switch state.
+        self._kill_switch_cfg = getattr(config, "kill_switch", {}) or {}
+        self._kill_switch_tripped = False
+        self._day_start_equity: Optional[float] = None
+        self._day_start_date: Optional[str] = None
+        # Persistent halt flag — survives process restarts so a kill-switch
+        # trip cannot be silently undone by simply restarting the agent.
+        self._halt_flag_path = os.path.join(config.log_dir, "KILL_SWITCH.flag")
+
         # Trade journal path for entry fingerprinting (feature #9a)
         self._trade_journal_path = os.path.join(config.log_dir, "trade_journal.jsonl")
         os.makedirs(config.log_dir, exist_ok=True)
@@ -162,9 +177,21 @@ class LiveTrader:
         # Structured trade journal (data/trade_journal.jsonl) consumed by daily_review.py
         self.journal = TradeJournal()
 
-        # Reset any stale drawdown halt from a previous (buggy) run so the
-        # agent resumes trading cleanly after the fix.
-        if getattr(self.risk_manager, "trading_halted", False):
+        # A tripped kill switch is a HARD halt: if the persistent flag exists,
+        # stay halted across restarts (manual removal of the flag file is
+        # required to resume). This must be checked before the soft-halt reset
+        # below so a restart cannot silently undo a liquidation event.
+        if os.path.exists(self._halt_flag_path):
+            self._kill_switch_tripped = True
+            self.risk_manager.trading_halted = True
+            self.logger.error(
+                f"KILL SWITCH ACTIVE — persistent halt flag present at "
+                f"{self._halt_flag_path}. Trading stays halted until the flag "
+                f"is manually removed and the cause is investigated."
+            )
+        elif getattr(self.risk_manager, "trading_halted", False):
+            # Reset any stale soft drawdown halt from a previous (buggy) run so
+            # the agent resumes trading cleanly after the fix.
             self.risk_manager.reset_halt()
             self.logger.warning(
                 "Cleared stale trading_halted flag from previous session"
@@ -1023,6 +1050,169 @@ class LiveTrader:
             return True
         return False
 
+    # ── Real-Time Kill Switch / Circuit Breaker ──────────────────────────
+
+    def _check_kill_switch(self) -> bool:
+        """
+        Hard circuit breaker on REAL broker equity.
+
+        Distinct from _check_real_drawdown (which only sets a soft
+        trading_halted flag): when this trips it cancels all open orders,
+        liquidates every position at market, and writes a persistent halt flag
+        so the halt survives a restart. It is designed to be cheap enough to
+        call at the very top of every cycle, and can also be called
+        independently (e.g. from a watchdog) to approximate real-time
+        protection without the cycle loop.
+
+        Returns True if the kill switch is (or just became) tripped.
+        """
+        if self._kill_switch_tripped:
+            return True
+        cfg = self._kill_switch_cfg
+        if not cfg.get("enabled", True):
+            return False
+
+        equity = self._get_actual_portfolio_value()
+        if equity <= 0:
+            # No reliable equity read — do nothing rather than liquidate on a
+            # transient data failure.
+            return False
+
+        # Reset the intraday baseline on the first check of a new day.
+        today = datetime.now().strftime("%Y-%m-%d")
+        if self._day_start_date != today:
+            self._day_start_date = today
+            self._day_start_equity = equity
+
+        rm = self.risk_manager
+        peak = max(getattr(rm, "peak_capital", 0.0) or 0.0, equity)
+        rm.peak_capital = peak
+        dd = (peak - equity) / peak if peak > 0 else 0.0
+        day_start = self._day_start_equity or equity
+        daily_loss = (day_start - equity) / day_start if day_start > 0 else 0.0
+
+        dd_limit = float(cfg.get("max_drawdown_limit", 0.20))
+        daily_limit = float(cfg.get("daily_loss_limit", 0.08))
+        floor = float(cfg.get("min_equity_floor", 0.0))
+
+        reason = None
+        if dd >= dd_limit:
+            reason = f"peak-to-trough drawdown {dd:.2%} >= {dd_limit:.2%}"
+        elif daily_loss >= daily_limit:
+            reason = f"intraday loss {daily_loss:.2%} >= {daily_limit:.2%}"
+        elif floor > 0 and equity < floor:
+            reason = f"equity ${equity:,.2f} below floor ${floor:,.2f}"
+
+        if reason:
+            self._trip_kill_switch(reason)
+            return True
+        return False
+
+    def _trip_kill_switch(self, reason: str):
+        """Liquidate everything and halt hard. Safe in dry-run (logs only)."""
+        self._kill_switch_tripped = True
+        self.risk_manager.trading_halted = True
+        self.logger.error(f"*** KILL SWITCH TRIPPED *** {reason} — liquidating all positions")
+        self._write_daily_log(
+            f"{datetime.now().strftime('%H:%M:%S')} | KILL SWITCH | {reason} | liquidating"
+        )
+
+        # 1) Cancel all resting/open orders so nothing fills after liquidation.
+        if not self.dry_run and self.alpaca_connected and self.api:
+            try:
+                self.api.cancel_all_orders()
+            except Exception as e:
+                self.logger.error(f"Kill switch: cancel_all_orders failed: {e}")
+        self._resting_stops.clear()
+
+        # 2) Liquidate every tracked position at market.
+        for symbol in list(self.risk_manager.positions.keys()):
+            pos = self.risk_manager.positions.get(symbol)
+            if pos is None:
+                continue
+            close_side = "buy" if getattr(pos, "is_short", False) else "sell"
+            qty = pos.quantity
+            if self.dry_run or not self.alpaca_connected or not self.api:
+                self.logger.error(
+                    f"[KILL SWITCH] would {close_side.upper()} {qty} {symbol} (market) to flatten"
+                )
+                continue
+            try:
+                self.api.submit_order(
+                    symbol=symbol, qty=str(qty), side=close_side,
+                    type="market", time_in_force="day",
+                )
+                self.logger.error(f"[KILL SWITCH] submitted market {close_side} {qty} {symbol}")
+            except Exception as e:
+                self.logger.error(f"Kill switch: failed to flatten {symbol}: {e}")
+
+        # 3) Persist the halt so a restart cannot silently resume trading.
+        try:
+            os.makedirs(os.path.dirname(self._halt_flag_path), exist_ok=True)
+            with open(self._halt_flag_path, "w") as f:
+                f.write(
+                    f"{datetime.now().isoformat()} | {reason}\n"
+                    "Remove this file only after investigating the loss.\n"
+                )
+        except Exception as e:
+            self.logger.error(f"Kill switch: could not write halt flag: {e}")
+
+    # ── Broker-Native Resting Stops ──────────────────────────────────────
+
+    def _submit_resting_stop(self, symbol: str):
+        """
+        Submit a GTC stop order resting at the broker for an open position.
+
+        The stop price is taken from the position the risk manager just opened
+        (Chandelier/percentage stop). For a long the stop is a SELL below
+        entry; for a short it is a BUY above entry. This is what protects the
+        position outside cycle execution (overnight, weekends, downtime).
+
+        Safe in dry-run / when not connected: logs the intended order only and
+        never contacts a broker.
+        """
+        if not getattr(config, "use_native_stops", True):
+            return
+        pos = self.risk_manager.positions.get(symbol)
+        if pos is None:
+            return
+        stop_price = round(float(pos.stop_loss), 2)
+        qty = pos.quantity
+        close_side = "buy" if getattr(pos, "is_short", False) else "sell"
+
+        if self.dry_run or not self.alpaca_connected or not self.api:
+            self.logger.info(
+                f"  {symbol}: [resting stop] would submit GTC stop {close_side} "
+                f"{qty} @ ${stop_price:.2f} (protects position outside cycles)"
+            )
+            return
+        try:
+            order = self.api.submit_order(
+                symbol=symbol, qty=str(qty), side=close_side,
+                type="stop", stop_price=str(stop_price), time_in_force="gtc",
+            )
+            self._resting_stops[symbol] = order.id
+            self.logger.info(
+                f"  {symbol}: resting GTC stop {close_side} {qty} @ ${stop_price:.2f} "
+                f"submitted (ID {order.id})"
+            )
+        except Exception as e:
+            self.logger.error(f"  {symbol}: failed to submit resting stop: {e}")
+
+    def _cancel_resting_stop(self, symbol: str):
+        """Cancel a symbol's resting stop order, if one exists."""
+        order_id = self._resting_stops.pop(symbol, None)
+        if not order_id:
+            return
+        if self.dry_run or not self.alpaca_connected or not self.api:
+            self.logger.info(f"  {symbol}: [resting stop] would cancel order {order_id}")
+            return
+        try:
+            self.api.cancel_order(order_id)
+            self.logger.info(f"  {symbol}: cancelled resting stop {order_id}")
+        except Exception as e:
+            self.logger.warning(f"  {symbol}: failed to cancel resting stop {order_id}: {e}")
+
     # ── Trading Cycle ────────────────────────────────────────────────────
 
     def _review_open_positions(self, actions: Dict) -> int:
@@ -1184,6 +1374,19 @@ class LiveTrader:
         # only this cycle's blocked / failed trades.
         self._cycle_attempts = []
 
+        # Real-time kill switch — hard circuit breaker on real equity. Checked
+        # FIRST so a breach liquidates and halts before any new orders. Once
+        # tripped it stays tripped (persistent flag), so this returns early
+        # every subsequent cycle until the flag is manually cleared.
+        if self._check_kill_switch():
+            self.logger.error("Trading halted — kill switch tripped")
+            ts = datetime.now().strftime("%H:%M:%S")
+            self._write_daily_log(
+                f"{ts} | Cycle {self.cycle_count} | KILL SWITCH HALT | "
+                f"PnL: ${self.total_pnl:+,.2f}"
+            )
+            return actions
+
         # Drawdown check — use the real portfolio value (BUG FIX #1),
         # not the buggy entry-price-based estimate in RiskManager.
         if self._check_real_drawdown():
@@ -1214,6 +1417,11 @@ class LiveTrader:
                 if success:
                     pnl_part = (filled - entry_px) * qty
                     self.risk_manager.apply_scale_out(sym, qty, stage)
+                    # Resync the resting stop to the reduced share count so it
+                    # doesn't try to sell more than we still hold.
+                    self._cancel_resting_stop(sym)
+                    if sym in self.risk_manager.positions:
+                        self._submit_resting_stop(sym)
                     self.total_pnl += pnl_part
                     self._log_trade(
                         symbol=sym, action="SCALE_OUT", quantity=qty,
@@ -1707,6 +1915,10 @@ class LiveTrader:
 
         self.risk_manager.open_short_position(symbol, quantity, filled_price, "agent_brain_short", atr)
 
+        # Rest a broker-native buy-stop (above entry) to cap short losses
+        # outside cycles.
+        self._submit_resting_stop(symbol)
+
         self._log_trade(
             symbol=symbol, action="SHORT", quantity=quantity,
             price=price, filled_price=filled_price,
@@ -1744,6 +1956,9 @@ class LiveTrader:
         quantity = pos.quantity
         strategy = pos.strategy
         entry_price = pos.entry_price
+
+        # Cancel the resting broker buy-stop before covering ourselves.
+        self._cancel_resting_stop(symbol)
 
         success, filled_price = self._submit_order(symbol, quantity, "buy")
         if not success:
@@ -1981,6 +2196,9 @@ class LiveTrader:
         # 9) Success path
         self.risk_manager.open_position(symbol, quantity, filled_price, signal.strategy, atr)
 
+        # Rest a broker-native stop so the position is protected outside cycles.
+        self._submit_resting_stop(symbol)
+
         # Structured trade journal (consumed by daily_review.py)
         self.journal.log_entry(
             symbol=symbol, entry_price=filled_price, strategy=signal.strategy,
@@ -2025,6 +2243,10 @@ class LiveTrader:
         quantity = pos.quantity
         strategy = pos.strategy
         entry_price = pos.entry_price
+
+        # Cancel the resting broker stop first so it can't fire after we cover
+        # the position ourselves (avoids an orphan order / double exit).
+        self._cancel_resting_stop(symbol)
 
         success, filled_price = self._submit_order(symbol, quantity, "sell")
         if not success:
