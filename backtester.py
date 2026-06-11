@@ -47,11 +47,28 @@ class Backtester:
         start_date: str = config.backtest_start,
         end_date: str = config.backtest_end,
         initial_capital: float = config.initial_capital,
+        commission_per_trade: Optional[float] = None,
+        slippage_bps: float = 5.0,
     ):
         self.symbols = symbols or config.symbols
         self.start_date = start_date
         self.end_date = end_date
         self.initial_capital = initial_capital
+
+        # -- Execution realism (integrity fixes) --
+        # Commission charged per fill (entry and exit each count as one fill).
+        self.commission_per_trade = (
+            config.commission_per_trade if commission_per_trade is None
+            else commission_per_trade
+        )
+        # One-way slippage/spread in basis points. Buys fill ABOVE and sells
+        # BELOW the reference (next-bar open) by this amount. 5 bps is a floor
+        # for liquid names; wide-spread names (COIN, MSTR, VXX, URA) are far
+        # worse and should be modelled per-name in a future pass.
+        self.slippage_bps = slippage_bps
+        # Orders decided on bar i are filled on bar i+1's OPEN — never on the
+        # same close used to make the decision (removes same-bar look-ahead).
+        self._pending_orders: List[Dict] = []
 
         self.logger = TradeLogger(log_dir="logs/backtest")
         self.data_fetcher = DataFetcher()
@@ -87,6 +104,81 @@ class Backtester:
 
         # SPY benchmark
         self.spy_equity: List[float] = []
+
+    # -- Execution helpers (cost + next-bar fill) --
+
+    def _fill_price(self, ref_price: float, side: str) -> float:
+        """Apply one-way slippage to a reference (next-bar open) price."""
+        frac = self.slippage_bps / 10_000.0
+        if side == "buy":
+            return ref_price * (1.0 + frac)
+        return ref_price * (1.0 - frac)
+
+    def _execute_pending_orders(
+        self, opens: Dict[str, float], date_str: str, day_actions: Dict
+    ):
+        """
+        Fill orders queued on the PREVIOUS bar at THIS bar's open.
+
+        This is the core look-ahead fix: a decision made from bar i's close is
+        executed at bar i+1's open (with slippage + commission), never at the
+        close that produced the signal.
+        """
+        if not self._pending_orders:
+            return
+        pending, self._pending_orders = self._pending_orders, []
+
+        for order in pending:
+            sym = order["symbol"]
+            open_px = opens.get(sym)
+            if open_px is None or open_px <= 0:
+                # No tradable open this bar (holiday/halt) — drop the order
+                # rather than fill at a stale price.
+                continue
+            side = order["side"]
+            fill = self._fill_price(open_px, side)
+
+            if side == "buy":
+                if sym in self.risk_manager.positions:
+                    continue
+                qty = self.risk_manager.calculate_position_size(
+                    sym, fill, order["combined"], order["vol"], order["regime"]
+                )
+                if qty <= 0:
+                    continue
+                self.risk_manager.open_position(sym, qty, fill, order["strategy"], order["atr"])
+                self.risk_manager.current_capital -= self.commission_per_trade
+                self.trade_log.append({
+                    "date": date_str, "symbol": sym, "action": "BUY",
+                    "quantity": qty, "price": fill, "strategy": order["strategy"],
+                    "commission": self.commission_per_trade,
+                })
+                if order["strategy"] in self.strategy_trades:
+                    self.strategy_trades[order["strategy"]] += 1
+                day_actions["buys"].append(sym)
+
+            elif side == "sell":
+                if sym not in self.risk_manager.positions:
+                    continue
+                pos = self.risk_manager.positions[sym]
+                pnl = self.risk_manager.close_position(sym, fill)
+                pnl_val = (pnl or 0) - self.commission_per_trade
+                self.risk_manager.current_capital -= self.commission_per_trade
+                self.self_improver.record_experience(
+                    symbol=sym, strategy=pos.strategy, action="SELL",
+                    signal_strength=order["combined"], entry_price=pos.entry_price,
+                    exit_price=fill, market_regime=order["regime"],
+                )
+                self.trade_log.append({
+                    "date": date_str, "symbol": sym, "action": "SELL",
+                    "price": fill, "pnl": pnl_val, "strategy": pos.strategy,
+                    "commission": self.commission_per_trade,
+                })
+                if pos.strategy in self.strategy_pnl:
+                    self.strategy_pnl[pos.strategy] += pnl_val
+                if pos.strategy in self.strategy_trades:
+                    self.strategy_trades[pos.strategy] += 1
+                day_actions["sells"].append(sym)
 
     def run(self) -> Dict:
         """
@@ -140,12 +232,22 @@ class Backtester:
         for i, date_str in enumerate(dates):
             day_actions = {"date": date_str, "buys": [], "sells": []}
 
-            # Get current prices
+            # Get current prices (close) and opens (for next-bar fills)
             current_prices = {}
+            current_opens = {}
             for sym, df in all_data.items():
                 mask = df.index.strftime("%Y-%m-%d") == date_str
                 if mask.any():
                     current_prices[sym] = float(df.loc[mask, "Close"].iloc[-1])
+                    if "Open" in df.columns:
+                        current_opens[sym] = float(df.loc[mask, "Open"].iloc[-1])
+                    else:
+                        current_opens[sym] = current_prices[sym]
+
+            # Fill orders decided on the PREVIOUS bar at THIS bar's open,
+            # BEFORE today's stop checks and signal generation (chronological:
+            # open happens before close). Removes same-bar look-ahead.
+            self._execute_pending_orders(current_opens, date_str, day_actions)
 
             # SPY tracking
             if spy_data is not None:
@@ -168,19 +270,26 @@ class Backtester:
             # Get regime-adjusted weights
             active_weights = self._get_active_weights()
 
-            # Check stop-losses
+            # Check stop-losses. Stops are intraday triggers, so they fill the
+            # same bar (at the stop-breaching close) WITH slippage + commission —
+            # unlike signal-based exits, which are EOD decisions queued to the
+            # next open.
             sl_tp = self.risk_manager.check_stop_loss_take_profit(current_prices)
             for sym in sl_tp:
                 if sym in current_prices:
                     pos = self.risk_manager.positions.get(sym)
                     if pos:
-                        pnl = self.risk_manager.close_position(sym, current_prices[sym])
-                        pnl_val = pnl or 0
+                        exit_side = "buy" if getattr(pos, "is_short", False) else "sell"
+                        fill = self._fill_price(current_prices[sym], exit_side)
+                        pnl = self.risk_manager.close_position(sym, fill)
+                        pnl_val = (pnl or 0) - self.commission_per_trade
+                        self.risk_manager.current_capital -= self.commission_per_trade
                         self.trade_log.append({
                             "date": date_str, "symbol": sym, "action": "SELL",
-                            "price": current_prices[sym], "pnl": pnl_val,
+                            "price": fill, "pnl": pnl_val,
                             "reason": "stop_loss_take_profit",
                             "strategy": pos.strategy,
+                            "commission": self.commission_per_trade,
                         })
                         if pos.strategy in self.strategy_pnl:
                             self.strategy_pnl[pos.strategy] += pnl_val
@@ -226,39 +335,24 @@ class Backtester:
                 can_trade, _ = self.risk_manager.can_trade(sym)
                 regime_str = self.current_regime.value
 
+                # Signals are computed from this bar's CLOSE but are only
+                # QUEUED — they execute at the NEXT bar's open in
+                # _execute_pending_orders. Sizing is re-run at fill time against
+                # the actual fill price, so we don't size here.
                 if combined > 0.25 and can_trade and sym not in self.risk_manager.positions:
-                    qty = self.risk_manager.calculate_position_size(
-                        sym, price, combined, vol, regime_str
-                    )
-                    if qty > 0:
-                        dominant = max(signals.items(), key=lambda x: abs(x[1].strength))
-                        self.risk_manager.open_position(sym, qty, price, dominant[0], atr)
-                        self.trade_log.append({
-                            "date": date_str, "symbol": sym, "action": "BUY",
-                            "quantity": qty, "price": price, "strategy": dominant[0],
-                        })
-                        if dominant[0] in self.strategy_trades:
-                            self.strategy_trades[dominant[0]] += 1
-                        day_actions["buys"].append(sym)
+                    dominant = max(signals.items(), key=lambda x: abs(x[1].strength))
+                    self._pending_orders.append({
+                        "symbol": sym, "side": "buy", "strategy": dominant[0],
+                        "combined": combined, "vol": vol, "atr": atr,
+                        "regime": regime_str,
+                    })
 
                 elif combined < -0.25 and sym in self.risk_manager.positions:
-                    pos = self.risk_manager.positions[sym]
-                    pnl = self.risk_manager.close_position(sym, price)
-                    pnl_val = pnl or 0
-                    self.self_improver.record_experience(
-                        symbol=sym, strategy=pos.strategy, action="SELL",
-                        signal_strength=combined, entry_price=pos.entry_price,
-                        exit_price=price, market_regime=regime_str,
-                    )
-                    self.trade_log.append({
-                        "date": date_str, "symbol": sym, "action": "SELL",
-                        "price": price, "pnl": pnl_val, "strategy": pos.strategy,
+                    self._pending_orders.append({
+                        "symbol": sym, "side": "sell", "strategy": "signal_exit",
+                        "combined": combined, "vol": vol, "atr": atr,
+                        "regime": regime_str,
                     })
-                    if pos.strategy in self.strategy_pnl:
-                        self.strategy_pnl[pos.strategy] += pnl_val
-                    if pos.strategy in self.strategy_trades:
-                        self.strategy_trades[pos.strategy] += 1
-                    day_actions["sells"].append(sym)
 
             # End-of-day equity
             total_value = self.risk_manager.current_capital

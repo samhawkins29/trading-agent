@@ -566,7 +566,20 @@ def compute_era_performance(
 # Main: Define Strategy Configs and Run
 # =============================================================================
 
+SYNTHETIC_WARNING = (
+    "\n" + "!" * 80 + "\n"
+    "  WARNING: SYNTHETIC DATA — RESULTS ARE NOT EVIDENCE OF A REAL EDGE.\n"
+    "  This backtest runs on a calibrated random price process, not real market\n"
+    "  data. Smooth, mean-reverting synthetic paths flatter exactly the\n"
+    "  strategies tested here, so positive results are close to self-fulfilling.\n"
+    "  Use ONLY as a directional sanity check. The live paper record is the\n"
+    "  ground truth. See REVIEW_AND_IMPROVEMENTS.md §2.2.\n"
+    + "!" * 80 + "\n"
+)
+
+
 def main():
+    print(SYNTHETIC_WARNING)
     print("=" * 80)
     print("  30-YEAR BACKTEST: 1996-2026")
     print("  Synthetic SPY data calibrated to historical era statistics")
@@ -769,6 +782,13 @@ def main():
     save_results = []
     for r in all_results:
         save_r = {k: v for k, v in r.items() if k != "equity_curve"}
+        # Tag every record so downstream consumers can't mistake synthetic
+        # results for real ones.
+        save_r["synthetic_data"] = True
+        save_r["trust_warning"] = (
+            "SYNTHETIC DATA — directional sanity check only, not evidence of a "
+            "real edge. See REVIEW_AND_IMPROVEMENTS.md §2.2."
+        )
         save_results.append(save_r)
 
     with open(results_path, "w") as f:
