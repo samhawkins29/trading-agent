@@ -2145,16 +2145,12 @@ class LiveTrader:
         )
         multiplier = leverage * sentiment_multiplier
         scaled = raw_quantity * multiplier
-        quantity = int(scaled)
-        # Rounding floor: if we wanted >0 shares but int() truncated to 0
-        # (e.g. raw=1 * 0.5 = 0.5 -> 0), use 1 instead so half-size positions
-        # don't silently become no-ops.
-        if quantity == 0 and raw_quantity > 0 and scaled > 0:
-            quantity = 1
-            self.logger.info(
-                f"  {symbol}: rounding fallback -> minimum quantity = 1 "
-                f"(scaled={scaled:.4f} truncated to 0)"
-            )
+        # Round to nearest share (not floor) so half-size positions aren't
+        # systematically biased down. The previous "if it truncated to 0, make
+        # it 1" hack is REMOVED: forcing a 1-share trade placed unintended
+        # positions the sizing logic had decided against. If sizing genuinely
+        # rounds to 0, we skip the trade cleanly below.
+        quantity = int(round(scaled))
         self.logger.info(
             f"  {symbol}: post-leverage sizing -> {quantity} shares "
             f"(raw={raw_quantity} * leverage={leverage:.2f} "

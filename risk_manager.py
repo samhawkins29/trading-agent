@@ -37,7 +37,21 @@ class Position:
     take_profit: float
     trailing_stop: Optional[float] = None
     highest_price: Optional[float] = None
-    is_short: bool = False      # True for short positions
+    is_short: bool = False
+
+    # ATR-based Chandelier stop state (feature #4)
+    entry_atr: float = 0.0                # ATR at time of entry
+    chandelier_trail_mult: float = 2.0    # ATR multiple to trail below peak
+    chandelier_activation_atr: float = 1.0  # ATR gain needed to activate trailing
+
+    # Momentum scaling state (feature #5)
+    original_quantity: int = 0            # quantity at entry (before any scale-outs)
+    scaled_40_pct: bool = False           # sold 40% at 1:1
+    scaled_30_pct: bool = False           # sold 30% at 2:1
+
+    # Time-based exit (feature #6)
+    max_holding_days: float = 30.0        # auto-close after this many days
+    half_life_days: Optional[float] = None  # used by mean_reversion strategy
 
 
 class RiskManager:
@@ -131,7 +145,36 @@ class RiskManager:
         max_shares_by_budget = int(remaining_budget / price)
         shares = min(shares, max_shares_by_budget)
 
+        # Step 6: Sector concentration cap — don't let one correlated factor
+        # (e.g. tech-beta) exceed max_sector_exposure of capital, even if the
+        # gross-exposure budget would otherwise allow it.
+        sector = self._sector_of(symbol)
+        sector_budget = (
+            self.current_capital * getattr(config, "max_sector_exposure", 1.0)
+            - self._sector_exposure(sector)
+        )
+        if sector_budget <= 0:
+            return 0
+        max_shares_by_sector = int(sector_budget / price)
+        shares = min(shares, max_shares_by_sector)
+
         return max(shares, 0)
+
+    def _sector_of(self, symbol: str) -> str:
+        """Map a symbol to its sector bucket (see config.sector_map)."""
+        return getattr(config, "sector_map", {}).get(symbol, "other")
+
+    def _sector_exposure(self, sector: str) -> float:
+        """Gross LONG dollar exposure currently held in a sector (at entry).
+
+        Concentration risk is about correlated longs piling into one factor, so
+        shorts (hedges) are not counted toward the cap.
+        """
+        return sum(
+            pos.quantity * pos.entry_price
+            for sym, pos in self.positions.items()
+            if not pos.is_short and self._sector_of(sym) == sector
+        )
 
     def _compute_kelly_fraction(self) -> float:
         """
@@ -207,31 +250,83 @@ class RiskManager:
                 return False, "Max open positions reached"
         return True, "OK"
 
+    # -- Chandelier Stop Parameters by Strategy (feature #4) --
+
+    _CHANDELIER_PARAMS = {
+        # (initial_stop_mult, activation_atr_mult, trail_mult)
+        "momentum":          (2.0, 1.0, 2.0),
+        "mean_reversion":    (1.5, 0.5, 1.0),
+        "sentiment":         (2.0, 1.0, 1.5),
+        "pattern_recognition": (2.5, 1.5, 2.0),
+        # Fallback for agent_brain / combined / unknown
+        "default":           (2.0, 1.0, 2.0),
+    }
+
+    # Max holding days by strategy (feature #6)
+    _MAX_HOLDING_DAYS = {
+        "momentum":          15.0,
+        "mean_reversion":    None,   # uses 2x half-life, min 3 days
+        "sentiment":         20.0,
+        "pattern_recognition": 30.0,
+        "default":           30.0,
+    }
+
+    def _get_chandelier_params(self, strategy: str) -> Tuple[float, float, float]:
+        """Return (initial_mult, activation_mult, trail_mult) for a strategy."""
+        # Strip combined(...) wrapper and agent_brain prefix
+        base = strategy.split("(")[0].lower()
+        if "momentum" in base:
+            return self._CHANDELIER_PARAMS["momentum"]
+        if "mean_reversion" in base or "mean-reversion" in base:
+            return self._CHANDELIER_PARAMS["mean_reversion"]
+        if "sentiment" in base:
+            return self._CHANDELIER_PARAMS["sentiment"]
+        if "pattern" in base:
+            return self._CHANDELIER_PARAMS["pattern_recognition"]
+        return self._CHANDELIER_PARAMS["default"]
+
+    def _get_max_holding_days(self, strategy: str, half_life_days: Optional[float]) -> float:
+        """Return maximum holding period in days for a strategy."""
+        base = strategy.split("(")[0].lower()
+        if "mean_reversion" in base or "mean-reversion" in base:
+            if half_life_days and half_life_days > 0:
+                return max(2.0 * half_life_days, 3.0)
+            return 10.0  # default for mean reversion when half-life unknown
+        if "momentum" in base:
+            return self._MAX_HOLDING_DAYS["momentum"]
+        if "sentiment" in base:
+            return self._MAX_HOLDING_DAYS["sentiment"]
+        if "pattern" in base:
+            return self._MAX_HOLDING_DAYS["pattern_recognition"]
+        return self._MAX_HOLDING_DAYS["default"]
+
     # -- Stop Loss / Take Profit --
 
     def compute_stop_take(
-        self, entry_price: float, atr: float
+        self, entry_price: float, atr: float, strategy: str = "default"
     ) -> Tuple[float, float]:
         """
-        Compute stop-loss and take-profit using ATR-based levels.
+        Compute initial stop-loss and take-profit using ATR-based Chandelier levels.
 
-        Stop: 3x ATR below entry (wider than before to avoid premature exits)
-        Take: 4x ATR above entry (2:1 risk-reward minimum)
+        Initial stop distance = initial_stop_mult * ATR (strategy-specific).
         Falls back to percentage-based levels if ATR is tiny.
         """
-        # ATR-based: wider stops for volatile stocks
-        atr_stop = entry_price - 3.0 * atr
-        atr_tp = entry_price + 4.0 * atr
+        init_mult, _, _ = self._get_chandelier_params(strategy)
 
-        # Percentage-based floor/ceiling
+        if atr > 0:
+            atr_stop = entry_price - init_mult * atr
+            # Take-profit targets 2x the initial risk
+            atr_tp = entry_price + 2.0 * init_mult * atr
+        else:
+            atr_stop = entry_price * (1 - config.stop_loss_pct)
+            atr_tp = entry_price * (1 + config.take_profit_pct)
+
+        # Percentage-based bounds
         pct_stop = entry_price * (1 - config.stop_loss_pct)
         pct_tp = entry_price * (1 + config.take_profit_pct)
 
-        # Use the WIDER stop (less likely to get stopped out prematurely)
-        stop_loss = min(atr_stop, pct_stop)
-
-        # Use the SMALLER take-profit (lock in gains)
-        take_profit = min(atr_tp, pct_tp)
+        stop_loss = min(atr_stop, pct_stop)    # WIDER stop
+        take_profit = min(atr_tp, pct_tp)       # SMALLER take-profit
 
         return stop_loss, take_profit
 
@@ -244,9 +339,12 @@ class RiskManager:
         price: float,
         strategy: str,
         atr: float,
+        half_life_days: Optional[float] = None,
     ):
-        """Record a new open position with trailing stop initialization."""
-        stop_loss, take_profit = self.compute_stop_take(price, atr)
+        """Record a new open position with Chandelier trailing stop initialization."""
+        stop_loss, take_profit = self.compute_stop_take(price, atr, strategy)
+        _, activation_mult, trail_mult = self._get_chandelier_params(strategy)
+        max_days = self._get_max_holding_days(strategy, half_life_days)
 
         self.positions[symbol] = Position(
             symbol=symbol,
@@ -258,12 +356,19 @@ class RiskManager:
             take_profit=take_profit,
             trailing_stop=stop_loss,
             highest_price=price,
+            entry_atr=atr,
+            chandelier_trail_mult=trail_mult,
+            chandelier_activation_atr=activation_mult,
+            original_quantity=quantity,
+            max_holding_days=max_days,
+            half_life_days=half_life_days,
         )
         self.daily_trades += 1
         self.current_capital -= quantity * price
         self.logger.info(
             f"Position opened: {quantity} {symbol} @ ${price:.2f} "
-            f"SL=${stop_loss:.2f} TP=${take_profit:.2f}"
+            f"SL=${stop_loss:.2f} TP=${take_profit:.2f} "
+            f"trail={trail_mult}xATR max_days={max_days:.0f}"
         )
 
     def open_short_position(
@@ -335,14 +440,14 @@ class RiskManager:
         self, prices: Dict[str, float]
     ) -> List[str]:
         """
-        Check all positions for stop-loss, take-profit, and trailing stops.
+        Check all positions for stop-loss, take-profit, Chandelier trailing
+        stops, and time-based exits.
 
-        Trailing stop (longs only): only activates after gain >= initial_risk
-        (1:1 R:R achieved), preventing the stop from tightening to within cents
-        of a newly opened position on the first tiny tick above entry.
+        Longs: ATR-based Chandelier trailing stop (feature #4).
+          - Activates once gain >= chandelier_activation_atr * entry_atr.
+          - Trails chandelier_trail_mult * entry_atr below peak price.
 
-        Short positions use inverted logic: stop triggers if price rises above
-        stop_loss, take-profit triggers if price falls below take_profit.
+        Time-based exits (feature #6): close positions older than max_holding_days.
         """
         to_close = []
         for symbol, pos in self.positions.items():
@@ -350,17 +455,18 @@ class RiskManager:
             if price is None:
                 continue
 
-            if pos.is_short:
-                # Time-based exit: auto-close shorts held > 24 hours
-                hours_held = (datetime.now() - pos.entry_time).total_seconds() / 3600
-                if hours_held > 24:
-                    self.logger.info(
-                        f"SHORT_TIME_EXIT: {symbol} held {hours_held:.1f}h > 24h limit"
-                    )
-                    to_close.append(symbol)
-                    continue
+            # Time-based exit (longs and shorts)
+            days_held = (datetime.now() - pos.entry_time).total_seconds() / 86400
+            if days_held > pos.max_holding_days:
+                self.logger.info(
+                    f"TIME_EXIT: {symbol} held {days_held:.1f}d > "
+                    f"{pos.max_holding_days:.0f}d [{pos.strategy}]"
+                )
+                to_close.append(symbol)
+                continue
 
-                # Short: stop triggers on UPWARD move, TP triggers on DOWNWARD move
+            # Short position
+            if pos.is_short:
                 if price >= pos.stop_loss:
                     self.logger.warning(
                         f"SHORT STOP triggered for {symbol} @ ${price:.2f} "
@@ -374,29 +480,25 @@ class RiskManager:
                     to_close.append(symbol)
                 continue
 
-            # Long position trailing stop —————————————————————————————————
+            # Long: update peak
             if pos.highest_price is not None and price > pos.highest_price:
                 pos.highest_price = price
-                gain = price - pos.entry_price
-                initial_risk = pos.entry_price - pos.stop_loss  # e.g. 8% of entry
 
-                # Only trail once gain >= initial_risk (1:1 R:R achieved).
-                # This prevents the stop from jumping to breakeven on a +$0.12 tick.
-                if gain > 0 and initial_risk > 0 and gain >= initial_risk:
-                    # Lock in gains above the initial-risk threshold at 50%
-                    trail_price = pos.entry_price + initial_risk + 0.5 * (gain - initial_risk)
-                    pos.trailing_stop = max(
-                        pos.trailing_stop or pos.stop_loss,
-                        trail_price,
-                    )
+            peak = pos.highest_price or pos.entry_price
+            gain = peak - pos.entry_price
+            activation_threshold = pos.chandelier_activation_atr * pos.entry_atr
 
-            # Effective stop is the higher of the hard stop and the trailing stop
+            # Activate Chandelier trailing stop once gain crosses activation threshold
+            if pos.entry_atr > 0 and gain >= activation_threshold:
+                chandelier_stop = peak - pos.chandelier_trail_mult * pos.entry_atr
+                pos.trailing_stop = max(pos.trailing_stop or pos.stop_loss, chandelier_stop)
+
             effective_stop = max(pos.stop_loss, pos.trailing_stop or 0)
 
             if price <= effective_stop:
                 self.logger.warning(
                     f"STOP triggered for {symbol} @ ${price:.2f} "
-                    f"(stop=${effective_stop:.2f})"
+                    f"(chandelier=${effective_stop:.2f}, peak=${peak:.2f})"
                 )
                 to_close.append(symbol)
             elif price >= pos.take_profit:
@@ -406,6 +508,72 @@ class RiskManager:
                 to_close.append(symbol)
 
         return to_close
+
+    # -- Momentum Scaling Out (feature #5) ---
+
+    def check_momentum_scaling(self, prices: Dict[str, float]) -> List[Dict]:
+        """
+        For momentum positions return partial-sell actions at 1:1 and 2:1 RR.
+          40% at 1:1 risk-reward
+          30% at 2:1 risk-reward
+          Remaining 30% trailed by Chandelier (handled by check_stop_loss_take_profit)
+
+        Returns list of {symbol, qty_to_sell, reason, scale_stage}.
+        """
+        scale_actions = []
+        for symbol, pos in self.positions.items():
+            price = prices.get(symbol)
+            if price is None or pos.is_short:
+                continue
+            if "momentum" not in pos.strategy.lower():
+                continue
+
+            initial_risk = pos.entry_price - pos.stop_loss
+            if initial_risk <= 0:
+                continue
+
+            orig_qty = pos.original_quantity or pos.quantity
+
+            # 40% at 1:1
+            if not pos.scaled_40_pct and price >= pos.entry_price + initial_risk:
+                qty = max(1, int(orig_qty * 0.40))
+                qty = min(qty, pos.quantity)
+                if qty > 0:
+                    scale_actions.append({
+                        "symbol": symbol,
+                        "qty_to_sell": qty,
+                        "reason": f"momentum_scale_40pct@1:1RR price=${price:.2f}",
+                        "scale_stage": "40pct",
+                    })
+
+            # 30% at 2:1 (only after 40% done)
+            elif pos.scaled_40_pct and not pos.scaled_30_pct and \
+                    price >= pos.entry_price + 2.0 * initial_risk:
+                qty = max(1, int(orig_qty * 0.30))
+                qty = min(qty, pos.quantity)
+                if qty > 0:
+                    scale_actions.append({
+                        "symbol": symbol,
+                        "qty_to_sell": qty,
+                        "reason": f"momentum_scale_30pct@2:1RR price=${price:.2f}",
+                        "scale_stage": "30pct",
+                    })
+
+        return scale_actions
+
+    def apply_scale_out(self, symbol: str, qty_sold: int, stage: str):
+        """Update position record after a partial momentum scale-out."""
+        pos = self.positions.get(symbol)
+        if pos is None:
+            return
+        pos.quantity = max(0, pos.quantity - qty_sold)
+        if stage == "40pct":
+            pos.scaled_40_pct = True
+        elif stage == "30pct":
+            pos.scaled_30_pct = True
+        self.logger.info(
+            f"Scale-out: {symbol} remaining_qty={pos.quantity} stage={stage}"
+        )
 
     # -- Drawdown Monitor --
 

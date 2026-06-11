@@ -76,6 +76,12 @@ class TradingConfig:
     # summed AFTER the 2x leverage is applied to each position.
     max_total_exposure: float = 0.80
     max_drawdown_pct: float = 0.15              # Halt at 15% drawdown
+    # Cap on gross LONG notional in any single sector, as a fraction of capital.
+    # The universe is heavily tech/beta-correlated (AAPL/MSFT/NVDA/QQQ/XLK/TQQQ
+    # all move together), so a "diversified" book of 12 names can really be one
+    # bet. This caps how much of that one bet the agent can take. See
+    # risk_manager.calculate_position_size and config.sector_map.
+    max_sector_exposure: float = 0.40
     stop_loss_pct: float = 0.08                 # 8% stop loss (was 3% — too tight)
     take_profit_pct: float = 0.20               # 20% take profit
     drawdown_scale_threshold: float = 0.04      # Start reducing at 4% DD
@@ -132,6 +138,41 @@ class TradingConfig:
         }
     )
 
+    # -- Sector map for correlation/concentration caps --
+    # Coarse first-pass grouping of the trading universe. Leveraged/sector tech
+    # ETFs (QQQ, TQQQ, XLK) are deliberately bucketed WITH single-name tech so
+    # the cap captures the dominant tech-beta factor rather than treating them
+    # as independent diversifiers. Unknown symbols fall back to "other".
+    sector_map: dict = field(
+        default_factory=lambda: {
+            # Tech / tech-beta (single names + tech ETFs + leveraged tech)
+            "AAPL": "tech", "MSFT": "tech", "GOOGL": "tech", "AMZN": "tech",
+            "META": "tech", "NVDA": "tech", "TSLA": "tech", "AMD": "tech",
+            "NFLX": "tech", "CRM": "tech", "XLK": "tech", "QQQ": "tech",
+            "TQQQ": "tech",
+            # Financials
+            "JPM": "financials", "V": "financials", "MA": "financials",
+            "GS": "financials", "BAC": "financials", "BRK-B": "financials",
+            "XLF": "financials",
+            # High-beta growth / crypto-proxy
+            "COIN": "high_beta_growth", "PLTR": "high_beta_growth",
+            "SOFI": "high_beta_growth", "ARKK": "high_beta_growth",
+            "MSTR": "high_beta_growth", "GBTC": "crypto", "IBIT": "crypto",
+            # Consumer / industrial / healthcare
+            "COST": "consumer", "HD": "consumer", "DIS": "consumer",
+            "BA": "industrials", "UNH": "healthcare", "XLV": "healthcare",
+            "XLI": "industrials",
+            # Energy / commodities / metals
+            "XOM": "energy", "CVX": "energy", "XLE": "energy", "USO": "energy",
+            "GLD": "metals", "SLV": "metals", "COPX": "metals", "URA": "metals",
+            "DBA": "agriculture",
+            # Broad index / international / bonds / vol / inverse
+            "SPY": "broad_index", "IWM": "broad_index", "DIA": "broad_index",
+            "EEM": "international", "EFA": "international", "FXI": "international",
+            "TLT": "bonds", "VXX": "volatility", "SH": "inverse",
+        }
+    )
+
     # -- Shorting --
     shorting_enabled: bool = True          # Allow brain to open short positions
 
@@ -155,9 +196,13 @@ class TradingConfig:
     # -- Leverage --
     leverage: dict = field(
         default_factory=lambda: {
+            # Default to NO leverage: the live edge is unproven (paper record is
+            # negative), and 2x on a correlated book with polled stops is the
+            # fastest path to a margin event. Raise deliberately only after a
+            # cost-inclusive positive track record exists.
             "mode": "fixed",                # none, fixed, kelly, vol_target
-            "fixed_multiplier": 2.0,        # For fixed mode
-            "max_leverage": 5.0,            # Hard cap on leverage
+            "fixed_multiplier": 1.0,        # For fixed mode (was 2.0)
+            "max_leverage": 2.0,            # Hard cap on leverage (was 5.0)
             "vol_target_annual": 0.15,      # Annual vol target for vol_target mode
             "max_drawdown_trigger": 0.10,   # Drawdown that triggers circuit breaker
             "ramp_days": 5,                 # Days to ramp back after circuit breaker
