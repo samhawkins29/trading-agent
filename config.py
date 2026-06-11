@@ -186,6 +186,16 @@ class TradingConfig:
     max_strategy_weight: float = 0.60
     evaluation_window: int = 20
     experience_replay_size: int = 1000   # Doubled from 500
+    # Freeze RL weight-learning until at least this many CLOSED round-trips
+    # have been recorded. With Beta(1,1) priors over 4 strategies, moving
+    # weights on 1–5 trades is curve-fitting to noise. Until the threshold is
+    # reached, update_weights leaves weights at their configured values.
+    min_trades_for_learning: int = 30
+    # Estimated round-trip cost (commission + slippage/spread) as a fraction of
+    # notional, subtracted from a trade's return before it is labelled win/loss.
+    # This stops fee-eating scalps (win 1c 60% of the time, lose $5 the rest)
+    # from looking good to the Thompson-Sampling posterior.
+    round_trip_cost_pct: float = 0.001   # 10 bps round trip
 
     # -- Backtesting --
     backtest_start: str = "2015-01-01"   # 10 years of data

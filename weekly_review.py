@@ -56,7 +56,7 @@ def load_journal_entries(days_back: int = 7) -> List[Dict]:
         return []
     cutoff = datetime.now() - timedelta(days=days_back)
     entries = []
-    with open(JOURNAL_PATH, encoding="utf-8") as f:
+    with open(JOURNAL_PATH, encoding="latin-1") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -79,7 +79,7 @@ def load_executed_trades(days_back: int = 7) -> List[Dict]:
         return []
     cutoff = datetime.now() - timedelta(days=days_back)
     trades = []
-    with open(TRADES_CSV, newline="", encoding="utf-8") as f:
+    with open(TRADES_CSV, newline="", encoding="latin-1") as f:
         reader = csv.DictReader(f)
         for row in reader:
             try:
@@ -236,7 +236,7 @@ def load_current_params() -> Dict:
     # Overlay with previously learned params
     if os.path.exists(LEARNED_PARAMS_PATH):
         try:
-            with open(LEARNED_PARAMS_PATH) as f:
+            with open(LEARNED_PARAMS_PATH, encoding="latin-1") as f:
                 learned = json.load(f)
             params.update(learned)
         except Exception:
@@ -570,6 +570,23 @@ def run_weekly_review(days_back: int = 7, dry_run: bool = False):
 
     # Parse response
     updated_params, memo = parse_opus_response(raw_response, current_params)
+
+    # Freeze NUMERIC params until a statistically meaningful sample exists.
+    # The qualitative memo is still saved (it's useful human-readable analysis),
+    # but weights/thresholds/stops are NOT rewritten off a handful of trades.
+    from config import config as _cfg
+    min_trades = getattr(_cfg, "min_trades_for_learning", 0)
+    if stats["total_trades"] < min_trades:
+        logger.warning(
+            f"Learning FROZEN: {stats['total_trades']}/{min_trades} completed "
+            "trades — keeping numeric params unchanged, saving memo only."
+        )
+        frozen = dict(current_params)            # preserve all numeric fields
+        updated_params = frozen
+        memo = (
+            f"[PARAMS FROZEN — only {stats['total_trades']}/{min_trades} closed "
+            f"trades; numeric parameters left unchanged.]\n\n" + memo
+        )
 
     # Save outputs
     save_learned_params(updated_params, memo)

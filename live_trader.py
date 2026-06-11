@@ -2013,6 +2013,7 @@ class LiveTrader:
             exit_price=filled_price,
             holding_period_hours=holding_hours,
             market_regime=self.current_regime.value,
+            is_short=True,
         )
 
         self._log_trade(

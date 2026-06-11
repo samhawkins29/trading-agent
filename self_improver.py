@@ -1,18 +1,20 @@
 """
-Self-Improvement Module — Redesigned with Regime-Aware Learning.
+Self-Improvement Module -- Thompson Sampling + Regime-Aware Learning.
 
-Key improvements over v1:
-  1. Regime-aware evaluation: strategies scored separately per regime
-  2. Per-regime weight profiles: momentum gets higher weight in trends,
-     mean reversion gets higher weight in range-bound markets
-  3. Improved Sharpe-like scoring with drawdown penalty
-  4. Larger replay buffer (1000 experiences)
-  5. Records market regime with each experience for conditional analysis
+Weight updates use Thompson Sampling with Beta distributions (one per strategy)
+instead of the previous softmax scoring. This provides:
+  - Natural exploration/exploitation balance
+  - Uncertainty-aware allocation (more exploration when data is sparse)
+  - James-Stein shrinkage toward equal weights (reduces variance early on)
+
+Per-regime weight profiles are still maintained and blended with the overall
+Thompson-sampled weights.
 
 Research basis:
+  - Thompson (1933): Sampling for multi-armed bandit selection
+  - James & Stein (1961): Shrinkage estimators beat OLS in high dimensions
+  - Russo et al. (2018): A Tutorial on Thompson Sampling (arXiv:1707.02038)
   - Regime-switching factor investing (Nystrup et al., 2020)
-  - Online learning / multi-armed bandits (EXP3, UCB)
-  - Experience replay from DQN (Mnih et al., 2015)
 """
 
 import json
@@ -95,6 +97,11 @@ class SelfImprover:
                 name: [] for name in self.weights
             }
 
+        # Thompson Sampling Beta parameters: alpha=wins+1, beta=losses+1
+        # Initialised to Beta(1,1) = Uniform (no prior preference).
+        self.ts_alpha: Dict[str, float] = {name: 1.0 for name in self.weights}
+        self.ts_beta: Dict[str, float] = {name: 1.0 for name in self.weights}
+
         self._load_state()
 
     # -- Record Outcome --
@@ -109,9 +116,30 @@ class SelfImprover:
         exit_price: float,
         holding_period_hours: float = 0.0,
         market_regime: str = "unknown",
+        is_short: bool = False,
     ):
-        """Record a completed trade with regime label."""
-        pnl = (exit_price - entry_price) / entry_price if entry_price > 0 else 0.0
+        """Record a completed trade with regime label.
+
+        pnl is the NET-OF-COST fractional return, direction-corrected:
+          - long:  (exit - entry) / entry
+          - short: (entry - exit) / entry   (a short profits when price falls)
+        then minus an estimated round-trip cost. Win/loss labelling (which
+        drives the Thompson-Sampling Beta posteriors) uses this net figure, so a
+        short is no longer mislabelled as a loss when it actually made money, and
+        a tiny gross gain that doesn't cover fees is correctly a loss.
+        """
+        # Infer direction from the closing action too, so callers that haven't
+        # been updated to pass is_short still label shorts correctly.
+        short = is_short or action.upper() in ("COVER", "SHORT")
+
+        if entry_price > 0:
+            gross = (exit_price - entry_price) / entry_price
+            if short:
+                gross = -gross
+        else:
+            gross = 0.0
+        cost = getattr(config, "round_trip_cost_pct", 0.0)
+        pnl = gross - cost   # net-of-cost return
 
         exp = Experience(
             timestamp=datetime.now().isoformat(),
@@ -134,6 +162,13 @@ class SelfImprover:
                 self.strategy_trades.get(strategy, 0) + 1
             )
 
+        # Thompson Sampling: update Beta(alpha, beta) for the strategy
+        if strategy in self.ts_alpha:
+            if pnl > 0:
+                self.ts_alpha[strategy] += 1.0   # win
+            else:
+                self.ts_beta[strategy] += 1.0    # loss
+
         # Per-regime tracking
         if market_regime in self.regime_strategy_pnls:
             if strategy in self.regime_strategy_pnls[market_regime]:
@@ -142,6 +177,8 @@ class SelfImprover:
         self.logger.info(
             f"EXPERIENCE | {strategy} {action} {symbol}: "
             f"PnL={pnl:+.4f} regime={market_regime} | "
+            f"TS a={self.ts_alpha.get(strategy, 1):.0f} "
+            f"b={self.ts_beta.get(strategy, 1):.0f} | "
             f"buffer_size={len(self.replay_buffer)}"
         )
 
@@ -151,35 +188,67 @@ class SelfImprover:
         self, regime_name: Optional[str] = None
     ) -> Dict[str, float]:
         """
-        Recalculate strategy weights using regime-aware evaluation.
+        Recalculate strategy weights using Thompson Sampling with
+        James-Stein shrinkage toward equal weights.
+
+        Posterior mean weight = alpha / (alpha + beta) per strategy,
+        then normalised and shrunk toward 1/K as trade count grows.
 
         If regime_name is provided, also updates the regime-specific
-        weight profile for that regime.
+        weight profile for that regime using the same approach.
+
+        FROZEN until min_trades_for_learning closed round-trips exist: moving
+        4 strategy weights (×4 regimes) on a handful of trades is curve-fitting
+        to noise. Below the threshold this is a no-op that returns the current
+        (configured) weights unchanged.
         """
-        if len(self.replay_buffer) < config.evaluation_window:
+        total_trades = sum(self.strategy_trades.values())
+        min_trades = getattr(config, "min_trades_for_learning", 0)
+        if total_trades < min_trades:
+            self.logger.info(
+                f"WEIGHT UPDATE SKIPPED | learning frozen: {total_trades}/"
+                f"{min_trades} closed trades — weights held at current values"
+            )
             return self.weights
 
-        # 1. Overall weight update
-        scores = {}
+        # 1. Thompson Sampling posterior means
+        ts_means = {}
         for name in self.weights:
-            scores[name] = self._evaluate_strategy(name)
+            a = self.ts_alpha.get(name, 1.0)
+            b = self.ts_beta.get(name, 1.0)
+            ts_means[name] = a / (a + b)   # posterior mean of Beta(a,b)
 
-        if not all(s == 0 for s in scores.values()):
-            new_weights = self._softmax_update(self.weights, scores)
-            new_weights = self._enforce_constraints(new_weights)
+        # 2. James-Stein shrinkage toward equal weights (1/K)
+        K = len(self.weights)
+        equal_weight = 1.0 / K
 
-            for name in self.weights:
-                delta = new_weights[name] - self.weights[name]
-                if abs(delta) > 0.001:
-                    self.logger.info(
-                        f"WEIGHT UPDATE | {name}: "
-                        f"{self.weights[name]:.3f} -> {new_weights[name]:.3f} "
-                        f"(score={scores[name]:.4f})"
-                    )
+        # Total trades as a proxy for data richness
+        total_trades = sum(self.strategy_trades.values())
+        # Shrinkage fades out as we accumulate >=200 trades
+        shrinkage = max(0.0, 1.0 - total_trades / 200.0)
 
-            self.weights = new_weights
+        shrunk = {}
+        for name in self.weights:
+            shrunk[name] = (1.0 - shrinkage) * ts_means[name] + shrinkage * equal_weight
 
-        # 2. Regime-specific weight update
+        new_weights = self._enforce_constraints(shrunk)
+
+        for name in self.weights:
+            delta = new_weights[name] - self.weights[name]
+            a = self.ts_alpha.get(name, 1.0)
+            b = self.ts_beta.get(name, 1.0)
+            if abs(delta) > 0.001:
+                self.logger.info(
+                    f"WEIGHT UPDATE | {name}: "
+                    f"{self.weights[name]:.3f} -> {new_weights[name]:.3f} "
+                    f"(TS a={a:.0f} b={b:.0f} mean={ts_means[name]:.3f} "
+                    f"shrink={shrinkage:.2f})"
+                )
+
+        self.weights = new_weights
+
+        # 3. Regime-specific weight update (softmax on historical scores --
+        #    keep regime profiles updated independently as regime data is sparse)
         if regime_name and regime_name in self.regime_weights:
             regime_scores = {}
             for name in self.weights:
@@ -198,6 +267,24 @@ class SelfImprover:
         self.logger.log_strategy_weights(self.weights)
 
         return self.weights
+
+    def sample_weights_for_exploration(self) -> Dict[str, float]:
+        """
+        Sample weights from Beta posteriors for exploration during weekly review.
+        This gives higher-variance weight suggestions than the posterior mean,
+        allowing the weekly review to discover better weight combinations.
+        """
+        sampled = {}
+        for name in self.weights:
+            a = self.ts_alpha.get(name, 1.0)
+            b = self.ts_beta.get(name, 1.0)
+            sampled[name] = float(np.random.beta(a, b))
+
+        # Normalise
+        total = sum(sampled.values())
+        if total > 0:
+            sampled = {k: v / total for k, v in sampled.items()}
+        return sampled
 
     def get_regime_weights(self, regime_name: str) -> Dict[str, float]:
         """Get the learned weight profile for a specific regime."""
@@ -302,6 +389,8 @@ class SelfImprover:
             "regime_weights": self.regime_weights,
             "replay_buffer": [asdict(e) for e in self.replay_buffer],
             "strategy_trades": self.strategy_trades,
+            "ts_alpha": self.ts_alpha,
+            "ts_beta": self.ts_beta,
             "updated_at": datetime.now().isoformat(),
         }
         path = os.path.join(self.save_path, "self_improver_state.json")
@@ -330,9 +419,18 @@ class SelfImprover:
                     self.replay_buffer.append(Experience(**e_dict))
             if "strategy_trades" in state:
                 self.strategy_trades.update(state["strategy_trades"])
+            if "ts_alpha" in state:
+                for name in self.ts_alpha:
+                    if name in state["ts_alpha"]:
+                        self.ts_alpha[name] = float(state["ts_alpha"][name])
+            if "ts_beta" in state:
+                for name in self.ts_beta:
+                    if name in state["ts_beta"]:
+                        self.ts_beta[name] = float(state["ts_beta"][name])
             self.logger.info(
                 f"Loaded self-improver state: "
-                f"{len(self.replay_buffer)} experiences"
+                f"{len(self.replay_buffer)} experiences | "
+                f"TS params: {', '.join(f'{n}(a={self.ts_alpha[n]:.0f},b={self.ts_beta[n]:.0f})' for n in self.ts_alpha)}"
             )
         except Exception as e:
             self.logger.warning(f"Failed to load self-improver state: {e}")

@@ -35,7 +35,10 @@ class TestExperienceReplayBuffer:
             signal_strength=0.5, entry_price=100.0, exit_price=110.0,
         )
         exp = self_improver.replay_buffer[-1]
-        expected_pnl = (110.0 - 100.0) / 100.0  # 0.10
+        # pnl is now stored NET of the estimated round-trip cost (P6 fix), so a
+        # 10% gross long gain records as 0.10 minus round_trip_cost_pct.
+        from config import config
+        expected_pnl = (110.0 - 100.0) / 100.0 - config.round_trip_cost_pct
         assert abs(exp.pnl - expected_pnl) < 1e-10
 
     def test_strategy_pnl_tracked(self, self_improver):
