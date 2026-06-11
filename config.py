@@ -2,12 +2,15 @@
 Configuration for the AI Trading Agent.
 Redesigned with evidence-based parameters from quantitative research.
 
-Key changes from v1:
-  - Stop-loss widened from 3% to 6% (ATR-based, research shows 3% too tight)
-  - Take-profit widened from 8% to 15%
-  - Position sizing via half-Kelly criterion with vol targeting
-  - Backtest period extended to 10 years (2015-2025)
-  - Regime-based dynamic strategy weighting enabled
+Current defaults (kept in sync with the values below — see git history for the
+evolution; the previous docstring had drifted out of sync with the code):
+  - Stop-loss 8% / take-profit 20% (ATR-based Chandelier, pct as a fallback);
+    these may be overridden at runtime by learned_params.json (bounds-checked).
+  - Position sizing via Kelly (kelly_fraction=0.6) with vol targeting, plus a
+    per-sector concentration cap (max_sector_exposure).
+  - Leverage defaults to 1.0x (unlevered); raise only after a cost-inclusive
+    positive track record.
+  - Backtest window 2015-2025; regime-based dynamic strategy weighting enabled.
 """
 
 import os
