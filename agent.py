@@ -13,6 +13,18 @@ Pipeline per cycle:
   data -> indicators -> regime detection -> strategy signals ->
   regime-weighted aggregation -> Kelly+vol position sizing ->
   risk check -> execute -> log -> self-improve
+
+ROLE / RELATIONSHIP TO live_trader.py:
+  This is the TESTED, simpler "library" engine used by main.py and most of the
+  test suite. live_trader.py is the engine that actually paper-trades (Claude
+  brain, Alpaca reconciliation, learned-params, native stops, kill switch).
+  The two share the SAME risk core — they call the same RiskManager methods
+  (calculate_position_size, check_stop_loss_take_profit, compute_stop_take) and
+  the same config singleton — so risk-core fixes (sector caps, stop levels,
+  Kelly sizing) apply identically to both. The remaining divergence is
+  feature-level and intentional. Collapsing the two into one execution path
+  with this logic as a shared library is a tracked follow-up
+  (REVIEW_AND_IMPROVEMENTS.md §1.3 / P4).
 """
 
 import time
@@ -377,8 +389,10 @@ class TradingAgent:
 
         executed_price = price
         if self.alpaca_available and self.paper_trade:
+            is_short = pos.is_short or quantity < 0
+            side = "buy" if is_short else "sell"
             executed_price = (
-                self._alpaca_order(symbol, quantity, "sell") or price
+                self._alpaca_order(symbol, abs(quantity), side) or price
             )
 
         pnl = self.risk_manager.close_position(symbol, executed_price)
